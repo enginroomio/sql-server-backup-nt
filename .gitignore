@@ -1,0 +1,11 @@
+artifacts/
+**/bin/
+**/obj/
+*.user
+*.suo
+.DS_Store
+# Prebuilt exe is large (~160MB); CI builds from source. Keep local dist/ for end-user USB copy if needed.
+# Uncomment next line to exclude from git:
+# dist/
+.tmp/
+*.pwd

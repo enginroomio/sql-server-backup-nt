@@ -1,0 +1,80 @@
+# Free GitHub Actions only (windows-latest).
+# Uses SQL Server Express LocalDB + Windows Authentication — no SA password, no repo secrets.
+# Public repos: Actions minutes are free on standard GitHub-hosted runners.
+name: windows-sql-smoke
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'backup.master.sql'
+      - 'basit-ayarlar.json'
+      - 'setup.ps1'
+      - 'setup-server.ps1'
+      - '.github/workflows/windows-sql-smoke.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'backup.master.sql'
+      - 'basit-ayarlar.json'
+      - 'setup.ps1'
+      - 'setup-server.ps1'
+      - '.github/workflows/windows-sql-smoke.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-sql-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Python (package validator)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ensure LocalDB / sqlcmd tooling
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # windows-latest (VS 2022 image) usually ships SqlLocalDB; install only if missing.
+          function Find-SqlLocalDb {
+            @(
+              "${env:ProgramFiles}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+              "${env:ProgramFiles}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
+              "${env:ProgramFiles(x86)}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+              "${env:ProgramFiles(x86)}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          $ldb = Find-SqlLocalDb
+          if (-not $ldb) {
+            Write-Host "Installing SqlLocalDB via Chocolatey..."
+            choco install sqllocaldb -y --no-progress
+            $ldb = Find-SqlLocalDb
+          }
+          if (-not $ldb) { throw 'SqlLocalDB.exe not available' }
+          Write-Host "Using $ldb"
+          & $ldb create MSSQLLocalDB -s 2>$null
+          & $ldb start MSSQLLocalDB
+          & $ldb info MSSQLLocalDB
+
+      - name: Windows SQL smoke (build + backup)
+        shell: pwsh
+        run: |
+          ./tests/windows_sql_smoke.ps1
