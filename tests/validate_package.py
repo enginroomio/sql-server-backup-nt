@@ -12,6 +12,15 @@ errors: list[str] = []
 ok: list[str] = []
 
 
+def _safe_print(*args: object) -> None:
+    """Windows GHA consoles are often cp1252 — avoid UnicodeEncodeError on Turkish chars."""
+    try:
+        print(*args)
+    except UnicodeEncodeError:
+        text = " ".join(str(a) for a in args)
+        print(text.encode("ascii", "replace").decode("ascii"))
+
+
 def check(cond: bool, msg: str) -> None:
     if cond:
         ok.append(msg)
@@ -102,14 +111,19 @@ def main() -> int:
     dist = ROOT / "dist" / "SQLYedeklemeAraci.exe"
     ok.append(f"dist exe {'present' if dist.is_file() else 'absent (CI builds)'} ")
 
-    print("=== validate_package ===")
+    _safe_print("=== validate_package ===")
     for m in ok:
-        print("  OK ", m)
+        _safe_print("  OK ", m)
     for m in errors:
-        print("  FAIL", m)
-    print(f"Result: {len(ok)} ok, {len(errors)} fail")
+        _safe_print("  FAIL", m)
+    _safe_print(f"Result: {len(ok)} ok, {len(errors)} fail")
     return 1 if errors else 0
 
 
 if __name__ == "__main__":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
     sys.exit(main())

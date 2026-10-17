@@ -42,6 +42,8 @@ function Find-SqlCmd {
 }
 
 Write-Host "==> Package validation (Python)" -ForegroundColor Cyan
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUTF8 = '1'
 python tests\validate_package.py
 if ($LASTEXITCODE -ne 0) { throw "validate_package.py failed" }
 
