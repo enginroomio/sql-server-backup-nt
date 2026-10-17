@@ -54,11 +54,17 @@ static class Program
                 Get("YedekKlasoru", "BackupFolder", "LocalFolder"),
                 GetInt("SaklamaAdedi", "Retention", "RetentionDays"),
                 Get("Saat", "BackupTime", "Time"));
+            // Hedef: GoogleDrive (varsayılan ürün yolu) veya Yerel/UNC. Kaynak her zaman SQL BACKUP.
+            var hedef = Get("Hedef", "Destination", "Dest");
+            if (string.IsNullOrWhiteSpace(hedef)) hedef = "GoogleDrive";
+            var destErr = cfg.ApplyDestination(
+                hedef,
+                Get("GoogleDriveKlasoru", "DriveFolder", "DriveKlasoru"),
+                Get("YedekKlasoru", "BackupFolder", "LocalFolder"));
+            if (destErr != null) { Console.Error.WriteLine(destErr); return 1; }
             ApplyMailFromBasit(cfg, r);
-            if (string.IsNullOrWhiteSpace(cfg.LocalFolder)) cfg.LocalFolder = @"C:\SQLBackup";
-            cfg.Destination = DestKind.LocalOrNetwork;
-            Directory.CreateDirectory(cfg.LocalFolder);
-            var err = DestCheck.WriteTest(cfg.LocalFolder);
+            Directory.CreateDirectory(cfg.DestRoot);
+            var err = DestCheck.WriteTest(cfg.DestRoot);
             if (err != null) { Console.Error.WriteLine(err); return 1; }
             cfg.SetupCompleted = true;
             cfg.Save();
@@ -68,6 +74,9 @@ static class Program
                 Console.WriteLine(ok ? $"Ayarlar kaydedildi. Görev: her gün {cfg.BackupTime}" : "Ayarlar kaydedildi; görev: " + msg);
             }
             else Console.WriteLine("Ayarlar kaydedildi (zamanlama kapalı).");
+            Console.WriteLine(cfg.Destination == DestKind.GoogleDrive
+                ? $"Hedef: Google Drive → {cfg.DriveTargetFolder} (kaynak: SQL Server BACKUP, Drive yalnızca senkron klasör)"
+                : $"Hedef: Yerel/Ağ → {cfg.DriveTargetFolder} (kaynak: SQL Server BACKUP)");
             if (cfg.MailEnabled)
                 Console.WriteLine(MailNotifier.IsConfigured(cfg)
                     ? $"E-posta bildirimi açık → {cfg.MailTo} (SMTP {cfg.SmtpHost}:{cfg.SmtpPort})"

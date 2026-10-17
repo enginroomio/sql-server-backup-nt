@@ -181,18 +181,55 @@ public class AppConfig
         }
     }
 
-    /// <summary>Apply the core end-user settings (server, backup folder, retention count, schedule time).</summary>
+    /// <summary>Apply core end-user settings. Destination is set separately via <see cref="ApplyDestination"/>.</summary>
     public void ApplySimple(string instance, string backupFolder, int retention, string time)
     {
         if (!string.IsNullOrWhiteSpace(instance)) InstanceName = instance.Trim();
+        // backupFolder here is only the local/UNC fallback path — does not force destination kind.
         if (!string.IsNullOrWhiteSpace(backupFolder))
-        {
-            Destination = DestKind.LocalOrNetwork;
             LocalFolder = backupFolder.Trim().TrimEnd('\\', '/');
-        }
         if (retention >= 1 && retention <= 365) RetentionDays = retention;
         if (TimeSpan.TryParse(time, out _)) BackupTime = time.Trim();
         Normalize();
+    }
+
+    /// <summary>
+    /// Destination: Google Drive (sync client "My Drive" folder) or local/UNC.
+    /// Architecture stays SQL BACKUP → staging .bak → ZIP → destination\SQLBackup (Drive sync uploads cloud-side).
+    /// Empty driveFolderPath triggers DriveDetector when kind is GoogleDrive.
+    /// </summary>
+    public string? ApplyDestination(string? kind, string? driveFolderPath, string? localFolderPath)
+    {
+        var k = (kind ?? "").Trim();
+        bool wantDrive = k.Equals("GoogleDrive", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Drive", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Google Drive", StringComparison.OrdinalIgnoreCase)
+            || k == "0";
+        bool wantLocal = k.Equals("Yerel", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Local", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("LocalOrNetwork", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Ag", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("UNC", StringComparison.OrdinalIgnoreCase)
+            || k == "1";
+
+        if (wantLocal || (!wantDrive && !string.IsNullOrWhiteSpace(localFolderPath) && string.IsNullOrWhiteSpace(k)))
+        {
+            Destination = DestKind.LocalOrNetwork;
+            if (!string.IsNullOrWhiteSpace(localFolderPath))
+                LocalFolder = localFolderPath.Trim().TrimEnd('\\', '/');
+            if (string.IsNullOrWhiteSpace(LocalFolder)) LocalFolder = @"C:\SQLBackup";
+            return null;
+        }
+
+        // Default / explicit Google Drive
+        Destination = DestKind.GoogleDrive;
+        if (!string.IsNullOrWhiteSpace(driveFolderPath))
+            DriveFolder = driveFolderPath.Trim().TrimEnd('\\', '/');
+        else if (string.IsNullOrWhiteSpace(DriveFolder) || !Directory.Exists(DriveFolder))
+            DriveFolder = DriveDetector.Detect() ?? DriveFolder;
+        if (string.IsNullOrWhiteSpace(DriveFolder) || !Directory.Exists(DriveFolder))
+            return "Google Drive klasörü bulunamadı. Google Drive for Desktop kurup kişisel hesapla giriş yapın, veya 'GoogleDriveKlasoru' yolunu yazın (ör. G:\\My Drive).";
+        return null;
     }
 
     /// <summary>Optional mail block from basit-ayarlar.json. Empty SmtpParola keeps the previously stored DPAPI secret.</summary>
@@ -339,11 +376,13 @@ public static class PathSafety
     }
 
     /// <summary>Restrict a newly created backup destination folder to the current user + SYSTEM (+ Administrators).</summary>
-    public static void HardenBackupFolderAcl(string sqlBackupDir)
+    public static void HardenBackupFolderAcl(string sqlBackupDir, DestKind? kind = null)
     {
         if (!OperatingSystem.IsWindows() || !Directory.Exists(sqlBackupDir)) return;
         // Skip UNC shares — ACL model differs; leave share permissions to the admin.
         if (sqlBackupDir.StartsWith(@"\\", StringComparison.Ordinal)) return;
+        // Never lock down Google Drive sync folders — Drive for Desktop needs its own ACLs / virtual FS.
+        if (kind == DestKind.GoogleDrive || LooksLikeGoogleDrivePath(sqlBackupDir)) return;
         try
         {
             var user = $"{Environment.UserDomainName}\\{Environment.UserName}";
@@ -355,6 +394,19 @@ public static class PathSafety
             else Logger.Warn("Yedek klasörü ACL ayarlanamadı; NTFS izinlerini elle kontrol edin.");
         }
         catch (Exception ex) { Logger.Warn("Yedek klasörü ACL: " + ex.Message); }
+    }
+
+    public static bool LooksLikeGoogleDrivePath(string path)
+    {
+        try
+        {
+            var p = path.Replace('/', '\\');
+            return p.Contains(@"\My Drive", StringComparison.OrdinalIgnoreCase)
+                || p.Contains(@"\Drive'ım", StringComparison.OrdinalIgnoreCase)
+                || p.Contains(@"\Google Drive", StringComparison.OrdinalIgnoreCase)
+                || p.Contains("GoogleDrive", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 }
 
@@ -372,7 +424,8 @@ public static class DestCheck
             var t = Path.Combine(dir, $".yazma_testi_{Guid.NewGuid():N}.tmp");
             File.WriteAllText(t, "ok");
             File.Delete(t);
-            PathSafety.HardenBackupFolderAcl(dir);
+            // ACL harden only for local disks — not Drive sync roots (caller may pass DestKind).
+            PathSafety.HardenBackupFolderAcl(dir, PathSafety.LooksLikeGoogleDrivePath(root) ? DestKind.GoogleDrive : DestKind.LocalOrNetwork);
             return null;
         }
         catch (Exception ex) { return "Klasöre yazılamıyor: " + ex.Message; }

@@ -23,7 +23,7 @@ Kısa, son kullanıcı / yönetici odaklı özet.
 ## Bilinçli sınırlar (yapısal)
 
 - **LocalMachine DPAPI (SYSTEM modu):** Aynı makinedeki yönetici süreçleri SQL/ZIP parolasını çözebilir → özel `db_backupoperator` hesabı kullanın, `sa` değil.
-- **Google Drive hedefi:** Senkron istemci oturumu ve WebView2 gerekir; sunucularda yerel/UNC tercih edin.
+- **Google Drive hedefi:** Yalnızca **hedef** (SQL kaynağın yerini almaz). Senkron istemci oturumu + WebView2 gerekir; OAuth secret uygulama içinde yok. Drive klasörüne agresif NTFS ACL uygulanmaz (senkron bozulmasın diye). Oturumsuz sunucularda yerel/UNC tercih edin.
 - **Yedek dosyaları:** ZIP’ler hedef klasöre yazılır; ağ paylaşımında paylaşım ACL’lerini sıkı tutun. İsteğe bağlı AES-256 şifrelemeyi açın.
 - **Zamanlanmış görev:** Interactive modda mevcut kullanıcı; SYSTEM en yüksek yetki — yalnızca SQL auth ile.
 

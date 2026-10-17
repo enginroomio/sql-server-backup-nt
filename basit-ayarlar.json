@@ -1,5 +1,7 @@
 {
   "Sunucu": ".\\SQLEXPRESS",
+  "Hedef": "GoogleDrive",
+  "GoogleDriveKlasoru": "",
   "YedekKlasoru": "C:\\SQLBackup",
   "SaklamaAdedi": 7,
   "Saat": "02:00",

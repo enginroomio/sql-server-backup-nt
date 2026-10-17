@@ -40,10 +40,13 @@ def main() -> int:
     for rel in required:
         check((ROOT / rel).is_file(), f"exists: {rel}")
 
-    # basit-ayarlar.json — core knobs + optional Eposta
+    # basit-ayarlar.json — SQL source + Drive dest + optional Eposta
     simple = json.loads((ROOT / "basit-ayarlar.json").read_text(encoding="utf-8"))
-    for key in ("Sunucu", "YedekKlasoru", "SaklamaAdedi", "Saat"):
+    for key in ("Sunucu", "Hedef", "SaklamaAdedi", "Saat"):
         check(key in simple, f"basit-ayarlar has {key}")
+    check(simple.get("Hedef") in ("GoogleDrive", "Yerel"), "Hedef is GoogleDrive or Yerel")
+    check(simple.get("Hedef") == "GoogleDrive", "default Hedef is GoogleDrive (Drive destination)")
+    check("GoogleDriveKlasoru" in simple, "basit-ayarlar has GoogleDriveKlasoru")
     check(isinstance(simple.get("SaklamaAdedi"), int) and 1 <= simple["SaklamaAdedi"] <= 365, "SaklamaAdedi in 1..365")
     check(bool(re.fullmatch(r"\d{1,2}:\d{2}", str(simple.get("Saat", "")))), "Saat looks like HH:mm")
     mail = simple.get("Eposta") or {}

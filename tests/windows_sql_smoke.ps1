@@ -92,8 +92,10 @@ $staging = Join-Path $backupRoot 'Staging'
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
 $simple = Join-Path $backupRoot 'basit-ayarlar.ci.json'
+# CI: local destination only — no Google Drive / secrets. Production default is GoogleDrive.
 @{
     Sunucu       = $instance
+    Hedef        = 'Yerel'
     YedekKlasoru = $backupRoot
     SaklamaAdedi = 3
     Saat         = '03:30'

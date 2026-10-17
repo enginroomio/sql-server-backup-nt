@@ -1,55 +1,51 @@
-# Hızlı Başlangıç (Windows Server)
+# Hızlı Başlangıç — SQL yedek → Google Drive
 
-Teknik ekip olmadan, birkaç ayar ile kurulum.
+**Kaynak:** SQL Server (`BACKUP DATABASE`)  
+**Hedef:** Google Drive senkron klasörü (`...\SQLBackup\`)  
+Drive, SQL yedeğinin yerine geçmez.
 
-## Adımlar
+## Adımlar (Drive hedefi)
 
-1. Klasörü sunucuya kopyalayın (`dist\SQLYedeklemeAraci.exe` dahil olmalı).
-2. `basit-ayarlar.json` dosyasını düzenleyin (zorunlu 4 alan + isteğe bağlı e-posta):
+1. [Google Drive for Desktop](https://www.google.com/drive/download/) kurun, kişisel hesapla giriş yapın.
+2. `basit-ayarlar.json`:
 
 ```json
 {
   "Sunucu": ".\\SQLEXPRESS",
-  "YedekKlasoru": "C:\\SQLBackup",
+  "Hedef": "GoogleDrive",
+  "GoogleDriveKlasoru": "",
   "SaklamaAdedi": 7,
-  "Saat": "02:00",
-  "Eposta": {
-    "Acik": true,
-    "SmtpSunucu": "smtp.ornek.com",
-    "SmtpPort": 587,
-    "Ssl": true,
-    "Kimden": "yedek@ornek.com",
-    "Kime": "yonetici@ornek.com",
-    "SmtpKullanici": "yedek@ornek.com",
-    "SmtpParola": "SMTP_PAROLANIZ",
-    "BasaridaGonder": true,
-    "HatadaGonder": true
-  }
+  "Saat": "02:00"
 }
 ```
 
-3. `Kurulum-Sunucu.bat` → çift tık → UAC’de **Evet** (veya `Uygula-Ayarlar.ps1`).
-4. Uygulamada **Test Yedeği Al**. Yeşil kutular = tamam.  
-   E-posta açıksa başarı mailinin konusu: **yedekleme başarılı** (gövde de aynı ifadeyi içerir).
+- `GoogleDriveKlasoru` boş bırakılabilir (uygulama `My Drive` / `Drive'ım` yolunu arar).
+- Bulamazsa örn. `G:\\My Drive` yazın.
 
-## E-posta notları
+3. `setup.bat` veya `Kurulum-Sunucu.bat` → UAC **Evet**.
+4. **Test Yedeği Al**. ZIP’ler `...\SQLBackup\` altında; Drive istemcisi buluta senkronlar.
 
-- Varsayılan: `Eposta.Acik = false` (mail kapalı).
-- Günlük görev (`--backup`) ve Test Yedeği aynı motoru kullanır → başarıda mail gider.
-- SMTP parolası diske düz metin yazılmaz (DPAPI). `SmtpParola`’yı bir kez yazıp uyguladıktan sonra dosyadan silebilirsiniz.
-- Mail gitmezse günlükte uyarı görünür; yedek yine **başarılı** kalır.
+## Yerel / UNC (Drive yoksa)
 
-## Ne yedeklenir?
+```json
+{
+  "Sunucu": ".\\SQLEXPRESS",
+  "Hedef": "Yerel",
+  "YedekKlasoru": "C:\\SQLBackup",
+  "SaklamaAdedi": 7,
+  "Saat": "02:00"
+}
+```
 
-Tüm **kullanıcı** veritabanları (master/model/msdb/tempdb hariç). Yedekler `YedekKlasoru\SQLBackup\` altında `.zip` olarak durur.
+Windows Server’da oturum kapalıysa **Yerel/UNC** tercih edin.
 
-## Oturum kapalı sunucu
+## E-posta (isteğe bağlı)
 
-Ayarlar → **Sunucu Modu**:
+`Eposta.Acik: true` + SMTP alanları → başarıda “yedekleme başarılı”. Ayrıntı: güvenlik notları / e-posta dokümanı.
 
-- **Oturum açılmadan** — Windows parolanız bir kez istenir (görev zamanlayıcıya kaydedilir; uygulama saklamaz).
-- **SYSTEM** — Windows parolası gerekmez; SQL kullanıcı/parola (Gelişmiş Ayarlar) gerekir.
+## Sunucu / Drive uyarıları
 
-## Sorun olursa
-
-Ayarlar → **Hızlı Kontrol**. Ayrıntı: `KURULUM_AYARLAR.md`. Güvenlik: `GUVENLIK.md`.
+- Drive senkronu kullanıcı oturumu ister.
+- WebView2 gerekebilir.
+- Drive UNC üzerinde çalışmaz.
+- Zamanlanmış görev: oturum açık (Interactive) veya NoLogon **aynı** kullanıcı (Drive klasörüne erişim için).

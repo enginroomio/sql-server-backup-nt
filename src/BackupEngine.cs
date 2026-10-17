@@ -114,7 +114,8 @@ public class BackupEngine
                 throw new InvalidOperationException("Geçici (staging) klasör yolu güvenli değil. Varsayılanı kullanın: " + Paths.DefaultStaging);
             Staging.Ensure(_cfg);
             Directory.CreateDirectory(_cfg.DriveTargetFolder);
-            PathSafety.HardenBackupFolderAcl(_cfg.DriveTargetFolder);
+            // SQL BACKUP → staging → ZIP → DriveTargetFolder (Google Drive sync client uploads; we never skip SQL BACKUP).
+            PathSafety.HardenBackupFolderAcl(_cfg.DriveTargetFolder, _cfg.Destination);
 
             var dbs = ListUserDatabases();
             foreach (var s in dbs.Where(d => !d.Eligible))
