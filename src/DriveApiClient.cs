@@ -10,7 +10,7 @@ namespace SqlBackupTool;
 /// Google Drive upload: user OAuth refresh token (Aze-like) or service-account JSON.
 /// No Drive for Desktop required. Secrets never logged.
 /// </summary>
-public sealed class DriveApiClient : IDisposable
+public sealed class DriveApiClient : IDriveUploader
 {
     static readonly Regex ZipNameRx = new(@"^[\w.\- ]+_\d{8}_\d{6}\.zip$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     const string DefaultFolderName = "SQLBackup";
@@ -22,6 +22,17 @@ public sealed class DriveApiClient : IDisposable
     {
         _svc = svc;
         _folderId = folderId;
+    }
+
+    /// <summary>ZIP leaf names produced by the app (db_yyyyMMdd_HHmmss.zip).</summary>
+    public static bool IsSafeZipFileName(string fileName) =>
+        !string.IsNullOrWhiteSpace(fileName) && ZipNameRx.IsMatch(fileName);
+
+    /// <summary>Shared preflight for real Drive and <see cref="FakeDriveUploader"/> (no network).</summary>
+    public static void ValidateUploadArgs(string localZipPath, string fileName)
+    {
+        if (!File.Exists(localZipPath)) throw new FileNotFoundException("Yüklenecek ZIP yok: " + localZipPath);
+        if (!IsSafeZipFileName(fileName)) throw new InvalidOperationException("Güvenli olmayan Drive dosya adı: " + fileName);
     }
 
     public static DriveApiClient Create(AppConfig cfg)
@@ -84,8 +95,7 @@ public sealed class DriveApiClient : IDisposable
 
     public string UploadZip(string localZipPath, string fileName)
     {
-        if (!File.Exists(localZipPath)) throw new FileNotFoundException("Yüklenecek ZIP yok: " + localZipPath);
-        if (!ZipNameRx.IsMatch(fileName)) throw new InvalidOperationException("Güvenli olmayan Drive dosya adı: " + fileName);
+        ValidateUploadArgs(localZipPath, fileName);
 
         var meta = new Google.Apis.Drive.v3.Data.File
         {

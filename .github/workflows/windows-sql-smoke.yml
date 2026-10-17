@@ -1,6 +1,9 @@
 # Free GitHub Actions only. Pin windows-2022: ships VS/SQL LocalDB reliably.
 # windows-latest (2025) may omit SqlLocalDB; Chocolatey fallback is flaky (504).
 # Uses SQL Server Express LocalDB + Windows Authentication — no SA password, no repo secrets.
+# Jobs:
+#   build-and-unit — explicit dotnet build + xUnit (Drive/SMTP mocked; no secrets)
+#   smoke — LocalDB + --apply-basit + --backup (headless; WinForms GUI N/A in CI)
 name: windows-sql-smoke
 
 on:
@@ -12,6 +15,7 @@ on:
       - 'basit-ayarlar.json'
       - 'setup.ps1'
       - 'setup-server.ps1'
+      - 'SQLYedeklemeAraci.sln'
       - '.github/workflows/windows-sql-smoke.yml'
   pull_request:
     paths:
@@ -21,6 +25,7 @@ on:
       - 'basit-ayarlar.json'
       - 'setup.ps1'
       - 'setup-server.ps1'
+      - 'SQLYedeklemeAraci.sln'
       - '.github/workflows/windows-sql-smoke.yml'
   workflow_dispatch:
 
@@ -29,7 +34,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-and-unit:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Python (package validator)
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Package validation
+        shell: pwsh
+        run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          python tests\validate_package.py
+          if ($LASTEXITCODE -ne 0) { throw "validate_package.py failed" }
+
+      - name: dotnet restore / build
+        shell: pwsh
+        run: |
+          dotnet restore SQLYedeklemeAraci.sln
+          if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed" }
+          dotnet build SQLYedeklemeAraci.sln -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
+
+      - name: dotnet test (Drive/SMTP mocked — no secrets)
+        shell: pwsh
+        run: |
+          dotnet test tests\SQLYedeklemeAraci.Tests\SQLYedeklemeAraci.Tests.csproj `
+            -c Release --no-build --verbosity normal
+          if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
+
   smoke:
+    needs: build-and-unit
     runs-on: windows-2022
     timeout-minutes: 25
     permissions:
@@ -123,7 +172,7 @@ jobs:
           Start-LocalDbInstance -Exe $ldb
           & $ldb info MSSQLLocalDB
 
-      - name: Windows SQL smoke (build + backup)
+      - name: Windows SQL smoke (publish + --apply-basit + --backup)
         shell: pwsh
         run: |
           ./tests/windows_sql_smoke.ps1
