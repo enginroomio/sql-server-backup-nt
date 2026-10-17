@@ -5,12 +5,14 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
-        ApplicationConfiguration.Initialize();
+        // Headless flags first — skip WinForms init so CI/scheduled runs stay lean.
         if (args.Any(a => a.Equals("--backup", StringComparison.OrdinalIgnoreCase)))
-            return RunHeadless();
+            return Exit(RunHeadless());
         var applyIdx = Array.FindIndex(args, a => a.Equals("--apply-basit", StringComparison.OrdinalIgnoreCase));
         if (applyIdx >= 0)
-            return ApplyBasit(applyIdx + 1 < args.Length ? args[applyIdx + 1] : "basit-ayarlar.json");
+            return Exit(ApplyBasit(applyIdx + 1 < args.Length ? args[applyIdx + 1] : "basit-ayarlar.json"));
+
+        ApplicationConfiguration.Initialize();
 
         using var mutex = new Mutex(true, @"Local\SQLYedeklemeAraci_UI", out bool first);
         if (!first)
@@ -198,6 +200,14 @@ static class Program
             ShowBalloon("Yedekleme HATASI", ex.Message, ToolTipIcon.Error);
             return 2;
         }
+    }
+
+
+    /// <summary>WinExe hosts sometimes drop Main's return; set process exit code explicitly.</summary>
+    static int Exit(int code)
+    {
+        Environment.ExitCode = code;
+        return code;
     }
 
     static void ShowBalloon(string title, string text, ToolTipIcon icon)

@@ -127,9 +127,24 @@ $cfgPath = Join-Path $cfgDir 'config.json'
     LastResults      = @{}
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
+# WinExe (GUI subsystem): PowerShell `&` does NOT wait and may leave a stale
+# $LASTEXITCODE. Always Start-Process -Wait -PassThru and read .ExitCode.
+function Invoke-WinExe {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [Parameter(Mandatory)] [string[]] $ArgumentList
+    )
+    $p = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList `
+        -Wait -PassThru -WindowStyle Hidden
+    if ($null -eq $p) { throw "Start-Process returned null for $FilePath" }
+    # ExitCode can be $null if process was not waited on; treat as failure.
+    if ($null -eq $p.ExitCode) { throw "No ExitCode from $FilePath (WinExe wait failed)" }
+    return [int]$p.ExitCode
+}
+
 Write-Host "==> Apply basit settings" -ForegroundColor Cyan
-& $exe --apply-basit $simple
-if ($LASTEXITCODE -ne 0) { throw "--apply-basit failed with $LASTEXITCODE" }
+$applyExit = Invoke-WinExe -FilePath $exe -ArgumentList @('--apply-basit', $simple)
+if ($applyExit -ne 0) { throw "--apply-basit failed with $applyExit" }
 
 # Re-assert staging (apply may normalize) and ScheduleEnabled false for CI
 $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
@@ -141,8 +156,7 @@ $cfg.InstanceName = $instance
 $cfg | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
 Write-Host "==> Run headless backup" -ForegroundColor Cyan
-& $exe --backup
-$backupExit = $LASTEXITCODE
+$backupExit = Invoke-WinExe -FilePath $exe -ArgumentList @('--backup')
 Write-Host "backup exit code: $backupExit"
 
 $zipDir = Join-Path $backupRoot 'SQLBackup'
