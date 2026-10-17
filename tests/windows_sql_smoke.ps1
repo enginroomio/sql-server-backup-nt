@@ -13,15 +13,23 @@ Set-Location $Root
 
 function Find-SqlLocalDb {
     $candidates = @(
-        "${env:ProgramFiles}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles}\Microsoft SQL Server\170\Tools\Binn\SqlLocalDB.exe",
         "${env:ProgramFiles}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
         "${env:ProgramFiles}\Microsoft SQL Server\140\Tools\Binn\SqlLocalDB.exe",
-        "${env:ProgramFiles(x86)}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
-        "${env:ProgramFiles(x86)}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe"
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\170\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe"
     )
     foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { return $c } }
     $cmd = Get-Command SqlLocalDB.exe -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
+    foreach ($root in @("${env:ProgramFiles}\Microsoft SQL Server", "${env:ProgramFiles(x86)}\Microsoft SQL Server")) {
+        if (-not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem -Path $root -Filter SqlLocalDB.exe -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($hit) { return $hit }
+    }
     return $null
 }
 
@@ -56,11 +64,32 @@ if (-not $localdb) {
 }
 if (-not $localdb) { throw "SqlLocalDB.exe still not found after install attempt." }
 
-& $localdb info MSSQLLocalDB 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    & $localdb create MSSQLLocalDB -s | Out-Null
+function Ensure-LocalDbRunning {
+    param([Parameter(Mandatory)] [string] $Exe)
+    Write-Host "Ensuring LocalDB instance MSSQLLocalDB is running via $Exe"
+    & $Exe info MSSQLLocalDB 2>$null | Out-Null
+    $exists = ($LASTEXITCODE -eq 0)
+    if (-not $exists) {
+        & $Exe create MSSQLLocalDB -s | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "sqllocaldb create failed ($LASTEXITCODE)" }
+    }
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        & $Exe start MSSQLLocalDB 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "LocalDB start ok (attempt $attempt)"
+            return
+        }
+        Write-Host "LocalDB start failed (attempt $attempt, exit=$LASTEXITCODE) — recreate + retry"
+        & $Exe stop MSSQLLocalDB 2>$null | Out-Null
+        & $Exe delete MSSQLLocalDB 2>$null | Out-Null
+        Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+        & $Exe create MSSQLLocalDB -s | Out-Host
+        if ($LASTEXITCODE -ne 0) { Write-Host "create exit=$LASTEXITCODE" }
+    }
+    throw "LocalDB would not start after retries"
 }
-& $localdb start MSSQLLocalDB | Out-Null
+
+Ensure-LocalDbRunning -Exe $localdb
 Write-Host "LocalDB ready via $localdb"
 
 $sqlcmd = Find-SqlCmd
@@ -68,8 +97,15 @@ if (-not $sqlcmd) { throw "sqlcmd.exe not found (needed to create CI test DB)." 
 
 $instance = '(localdb)\MSSQLLocalDB'
 Write-Host "==> Create CI database on $instance" -ForegroundColor Cyan
-& $sqlcmd -S $instance -E -Q "IF DB_ID(N'CiBackupTest') IS NULL CREATE DATABASE [CiBackupTest];" | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "CREATE DATABASE failed" }
+$created = $false
+for ($i = 1; $i -le 5; $i++) {
+    & $sqlcmd -S $instance -E -l 15 -Q "IF DB_ID(N'CiBackupTest') IS NULL CREATE DATABASE [CiBackupTest]; SELECT name FROM sys.databases WHERE name=N'CiBackupTest';" | Out-Host
+    if ($LASTEXITCODE -eq 0) { $created = $true; break }
+    Write-Host "sqlcmd CREATE attempt $i failed (exit=$LASTEXITCODE); waiting for LocalDB..."
+    Start-Sleep -Seconds (3 * $i)
+    & $localdb start MSSQLLocalDB 2>&1 | Out-Host
+}
+if (-not $created) { throw "CREATE DATABASE failed after retries" }
 
 Write-Host "==> dotnet publish (framework-dependent, not self-contained — saves CI minutes)" -ForegroundColor Cyan
 Push-Location (Join-Path $Root 'src')
@@ -88,10 +124,11 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "Published exe missing: $exe" }
 $backupRoot = Join-Path $env:RUNNER_TEMP 'SQLBackupCi'
 if (-not $backupRoot) { $backupRoot = Join-Path $env:TEMP 'SQLBackupCi' }
 New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-# Staging under ProgramData-like writable path for LocalDB service account quirks —
-# LocalDB runs as current user, so TEMP staging works if we point config there.
-$staging = Join-Path $backupRoot 'Staging'
+# Staging under ProgramData (app default). LocalDB runs as the current user — no
+# NT Service\MSSQL$* account — so user+SYSTEM ACL is enough (see Staging.Ensure).
+$staging = Join-Path $env:ProgramData 'SQLBackupTool\Staging'
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
+Remove-Item -LiteralPath (Join-Path $staging '.acl_ok') -Force -ErrorAction SilentlyContinue
 
 $simple = Join-Path $backupRoot 'basit-ayarlar.ci.json'
 # CI: local destination only — no Google Drive / secrets. Production default is GoogleDrive.
@@ -127,9 +164,24 @@ $cfgPath = Join-Path $cfgDir 'config.json'
     LastResults      = @{}
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
+# WinExe (GUI subsystem): PowerShell `&` does NOT wait and may leave a stale
+# $LASTEXITCODE. Always Start-Process -Wait -PassThru and read .ExitCode.
+function Invoke-WinExe {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [Parameter(Mandatory)] [string[]] $ArgumentList
+    )
+    $p = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList `
+        -Wait -PassThru -WindowStyle Hidden
+    if ($null -eq $p) { throw "Start-Process returned null for $FilePath" }
+    # ExitCode can be $null if process was not waited on; treat as failure.
+    if ($null -eq $p.ExitCode) { throw "No ExitCode from $FilePath (WinExe wait failed)" }
+    return [int]$p.ExitCode
+}
+
 Write-Host "==> Apply basit settings" -ForegroundColor Cyan
-& $exe --apply-basit $simple
-if ($LASTEXITCODE -ne 0) { throw "--apply-basit failed with $LASTEXITCODE" }
+$applyExit = Invoke-WinExe -FilePath $exe -ArgumentList @('--apply-basit', $simple)
+if ($applyExit -ne 0) { throw "--apply-basit failed with $applyExit" }
 
 # Re-assert staging (apply may normalize) and ScheduleEnabled false for CI
 $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
@@ -140,9 +192,28 @@ $cfg.LocalFolder = $backupRoot
 $cfg.InstanceName = $instance
 $cfg | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
+# Preflight: edition + direct BACKUP without COMPRESSION (surfaces real SQL errors, not only 3013)
+Write-Host "==> sqlcmd LocalDB diagnostic" -ForegroundColor Cyan
+$diagBak = Join-Path $staging ("CiDiag_" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".bak")
+$diagSql = @"
+SET NOCOUNT ON;
+SELECT CAST(SERVERPROPERTY('Edition') AS nvarchar(128)) AS Edition,
+       CAST(SERVERPROPERTY('EngineEdition') AS int) AS EngineEdition,
+       SUSER_SNAME() AS LoginName;
+BACKUP DATABASE [CiBackupTest] TO DISK = N'$($diagBak.Replace("'","''"))' WITH INIT, CHECKSUM;
+"@
+& $sqlcmd -S $instance -E -b -Q $diagSql | Out-Host
+$diagExit = $LASTEXITCODE
+Write-Host "sqlcmd diagnostic exit: $diagExit (bak=$diagBak)"
+if (Test-Path -LiteralPath $diagBak) {
+    Write-Host "diagnostic bak size: $((Get-Item -LiteralPath $diagBak).Length) bytes"
+    Remove-Item -LiteralPath $diagBak -Force -ErrorAction SilentlyContinue
+} elseif ($diagExit -ne 0) {
+    Write-Host "WARNING: raw LocalDB BACKUP failed before app --backup (see sqlcmd output above)" -ForegroundColor Yellow
+}
+
 Write-Host "==> Run headless backup" -ForegroundColor Cyan
-& $exe --backup
-$backupExit = $LASTEXITCODE
+$backupExit = Invoke-WinExe -FilePath $exe -ArgumentList @('--backup')
 Write-Host "backup exit code: $backupExit"
 
 $zipDir = Join-Path $backupRoot 'SQLBackup'
@@ -153,6 +224,8 @@ if (Test-Path -LiteralPath $zipDir) {
 Write-Host "Zips found: $($zips.Count) in $zipDir"
 if ($backupExit -ne 0 -or $zips.Count -lt 1) {
     Write-Host "---- config ----"; Get-Content $cfgPath -ErrorAction SilentlyContinue
+    Write-Host "---- staging listing ----"
+    if (Test-Path -LiteralPath $staging) { Get-ChildItem -LiteralPath $staging -Force | Format-Table Name, Length, LastWriteTime | Out-String | Write-Host }
     Write-Host "---- logs ----"
     $logDir = Join-Path $cfgDir 'logs'
     if (Test-Path $logDir) { Get-ChildItem $logDir | ForEach-Object { Write-Host $_.FullName; Get-Content $_.FullName -Tail 80 } }

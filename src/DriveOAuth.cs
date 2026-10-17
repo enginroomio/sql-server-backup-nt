@@ -45,13 +45,13 @@ public static class DriveOAuth
             ct,
             new FileDataStore(TokenStoreDir, true));
 
-        if (string.IsNullOrEmpty(cred.Token.RefreshToken))
+        // Some re-auth paths omit refresh_token; try a refresh once if missing.
+        if (string.IsNullOrEmpty(cred.Token?.RefreshToken))
         {
-            // Force refresh to ensure token object is populated; some re-auth paths omit refresh.
-            if (cred.Token.ShouldBeRefreshed(Google.Apis.Util.SystemClock.Default))
-                await cred.RefreshTokenAsync(ct);
+            try { await cred.RefreshTokenAsync(ct); }
+            catch { /* ignore — we'll fail below with a clear message */ }
         }
-        var refresh = cred.Token.RefreshToken;
+        var refresh = cred.Token?.RefreshToken;
         if (string.IsNullOrEmpty(refresh))
             throw new InvalidOperationException(
                 "Google yenileme jetonu alınamadı. Google Cloud OAuth istemcisinde 'yenileme jetonu' / test kullanıcısı ayarlarını kontrol edin.");

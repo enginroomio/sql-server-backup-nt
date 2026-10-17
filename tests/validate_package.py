@@ -104,7 +104,7 @@ def main() -> int:
     check("Yerel" in smoke, "GHA smoke stays Yerel (no Drive secrets)")
 
     wf = (ROOT / ".github/workflows/windows-sql-smoke.yml").read_text(encoding="utf-8", errors="replace")
-    check("windows-latest" in wf, "windows-latest")
+    check("windows-2022" in wf or "windows-latest" in wf, "windows-2022 (or latest) runner")
     secret_refs = re.findall(r"secrets\.[A-Za-z0-9_]+", wf)
     check(all(s == "secrets.GITHUB_TOKEN" for s in secret_refs), "no custom GHA secrets")
 

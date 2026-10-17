@@ -580,26 +580,67 @@ public static class Logger
 public static class Staging
 {
     /// <summary>Create staging folder and restrict ACL to current user + SYSTEM (+ SQL service account, which
-    /// must write the .bak — without it BACKUP TO DISK fails). Non-fatal on failure.</summary>
+    /// must write the .bak — without it BACKUP TO DISK fails). Non-fatal on failure.
+    /// LocalDB runs as the calling user (no NT Service\MSSQL$*): skip icacls entirely so inherited
+    /// ProgramData/user ACLs are left alone — lockdown has caused BACKUP 3013 on CI runners.</summary>
     public static void Ensure(AppConfig cfg)
     {
         try
         {
-            bool created = !Directory.Exists(cfg.StagingFolder);
             Directory.CreateDirectory(cfg.StagingFolder);
-            if (!created && File.Exists(Path.Combine(cfg.StagingFolder, ".acl_ok"))) return;
-            var inst = cfg.InstanceName.Contains('\\') ? cfg.InstanceName[(cfg.InstanceName.LastIndexOf('\\') + 1)..] : "MSSQLSERVER";
-            var svc = inst.Equals("MSSQLSERVER", StringComparison.OrdinalIgnoreCase) ? "NT Service\\MSSQLSERVER" : $"NT Service\\MSSQL${inst}";
+            var isLocalDb = cfg.InstanceName.Contains("localdb", StringComparison.OrdinalIgnoreCase)
+                || cfg.InstanceName.Contains("MSSQLLocalDB", StringComparison.OrdinalIgnoreCase);
+            if (isLocalDb)
+            {
+                Logger.Info("Geçici klasör hazır (LocalDB: ACL sıkılaştırma atlandı — kullanıcı bağlamında çalışır).");
+                return;
+            }
+
+            if (File.Exists(Path.Combine(cfg.StagingFolder, ".acl_ok"))) return;
             var user = $"{Environment.UserDomainName}\\{Environment.UserName}";
-            var args = $"\"{cfg.StagingFolder}\" /inheritance:r /grant:r \"{user}:(OI)(CI)F\" /grant:r \"*S-1-5-18:(OI)(CI)F\" /grant:r \"{svc}:(OI)(CI)M\"";
-            var psi = new ProcessStartInfo("icacls.exe", args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            using var p = Process.Start(psi)!;
-            var o = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-            p.WaitForExit(20000);
-            if (p.ExitCode == 0) { File.WriteAllText(Path.Combine(cfg.StagingFolder, ".acl_ok"), DateTime.Now.ToString("s")); Logger.Info("Geçici klasör izinleri kısıtlandı (kullanıcı + SYSTEM + SQL hizmeti)."); }
-            else Logger.Warn($"Geçici klasör izinleri ayarlanamadı (kod {p.ExitCode}): {o.Trim()} — setup.bat'i tekrar çalıştırın.");
+            // Base grants first — never bundle a possibly-missing SQL service SID in the same icacls
+            // call (one bad account makes the whole command fail and can leave a broken DACL).
+            var baseArgs = $"\"{cfg.StagingFolder}\" /inheritance:r /grant:r \"{user}:(OI)(CI)F\" /grant:r \"*S-1-5-18:(OI)(CI)F\"";
+            if (!RunIcacls(baseArgs, out var baseOut))
+            {
+                Logger.Warn($"Geçici klasör izinleri ayarlanamadı: {baseOut} — setup.bat'i tekrar çalıştırın.");
+                return;
+            }
+
+            var inst = cfg.InstanceName.Contains('\\') ? cfg.InstanceName[(cfg.InstanceName.LastIndexOf('\\') + 1)..] : "MSSQLSERVER";
+            if (string.IsNullOrWhiteSpace(inst) || inst.Equals("MSSQLLocalDB", StringComparison.OrdinalIgnoreCase))
+            {
+                File.WriteAllText(Path.Combine(cfg.StagingFolder, ".acl_ok"), DateTime.Now.ToString("s"));
+                Logger.Info("Geçici klasör izinleri kısıtlandı (kullanıcı + SYSTEM).");
+                return;
+            }
+            var svc = inst.Equals("MSSQLSERVER", StringComparison.OrdinalIgnoreCase) ? "NT Service\\MSSQLSERVER" : $"NT Service\\MSSQL${inst}";
+            if (RunIcacls($"\"{cfg.StagingFolder}\" /grant:r \"{svc}:(OI)(CI)M\"", out var svcOut))
+            {
+                File.WriteAllText(Path.Combine(cfg.StagingFolder, ".acl_ok"), DateTime.Now.ToString("s"));
+                Logger.Info("Geçici klasör izinleri kısıtlandı (kullanıcı + SYSTEM + SQL hizmeti).");
+            }
+            else
+            {
+                // User+SYSTEM already applied; SQL service grant is best-effort (wrong instance name, Express, etc.).
+                File.WriteAllText(Path.Combine(cfg.StagingFolder, ".acl_ok"), DateTime.Now.ToString("s"));
+                Logger.Warn($"SQL hizmet hesabı izni eklenemedi ({svc}): {svcOut.Trim()} — BACKUP yazamazsa setup.bat çalıştırın.");
+            }
         }
         catch (Exception ex) { Logger.Warn("Geçici klasör hazırlanamadı: " + ex.Message); }
+    }
+
+    static bool RunIcacls(string args, out string output)
+    {
+        var psi = new ProcessStartInfo("icacls.exe", args)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        using var p = Process.Start(psi)!;
+        output = (p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd()).Trim();
+        p.WaitForExit(20000);
+        return p.ExitCode == 0;
     }
 }
 
