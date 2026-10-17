@@ -13,15 +13,23 @@ Set-Location $Root
 
 function Find-SqlLocalDb {
     $candidates = @(
-        "${env:ProgramFiles}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles}\Microsoft SQL Server\170\Tools\Binn\SqlLocalDB.exe",
         "${env:ProgramFiles}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
         "${env:ProgramFiles}\Microsoft SQL Server\140\Tools\Binn\SqlLocalDB.exe",
-        "${env:ProgramFiles(x86)}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe",
-        "${env:ProgramFiles(x86)}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe"
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\170\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\160\Tools\Binn\SqlLocalDB.exe",
+        "${env:ProgramFiles(x86)}\Microsoft SQL Server\150\Tools\Binn\SqlLocalDB.exe"
     )
     foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { return $c } }
     $cmd = Get-Command SqlLocalDB.exe -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
+    foreach ($root in @("${env:ProgramFiles}\Microsoft SQL Server", "${env:ProgramFiles(x86)}\Microsoft SQL Server")) {
+        if (-not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem -Path $root -Filter SqlLocalDB.exe -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($hit) { return $hit }
+    }
     return $null
 }
 
