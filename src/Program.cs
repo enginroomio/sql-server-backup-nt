@@ -54,6 +54,7 @@ static class Program
                 Get("YedekKlasoru", "BackupFolder", "LocalFolder"),
                 GetInt("SaklamaAdedi", "Retention", "RetentionDays"),
                 Get("Saat", "BackupTime", "Time"));
+            ApplyMailFromBasit(cfg, r);
             if (string.IsNullOrWhiteSpace(cfg.LocalFolder)) cfg.LocalFolder = @"C:\SQLBackup";
             cfg.Destination = DestKind.LocalOrNetwork;
             Directory.CreateDirectory(cfg.LocalFolder);
@@ -67,6 +68,10 @@ static class Program
                 Console.WriteLine(ok ? $"Ayarlar kaydedildi. Görev: her gün {cfg.BackupTime}" : "Ayarlar kaydedildi; görev: " + msg);
             }
             else Console.WriteLine("Ayarlar kaydedildi (zamanlama kapalı).");
+            if (cfg.MailEnabled)
+                Console.WriteLine(MailNotifier.IsConfigured(cfg)
+                    ? $"E-posta bildirimi açık → {cfg.MailTo} (SMTP {cfg.SmtpHost}:{cfg.SmtpPort})"
+                    : "E-posta açık ama SMTP/Kimden/Kime eksik — bildirim gönderilmez.");
             return 0;
         }
         catch (Exception ex)
@@ -74,6 +79,46 @@ static class Program
             Console.Error.WriteLine(ex.Message);
             return 2;
         }
+    }
+
+    static void ApplyMailFromBasit(AppConfig cfg, System.Text.Json.JsonElement root)
+    {
+        if (!root.TryGetProperty("Eposta", out var mail) && !root.TryGetProperty("Mail", out mail))
+            return;
+        static string S(System.Text.Json.JsonElement e, params string[] keys)
+        {
+            foreach (var k in keys)
+                if (e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return v.GetString() ?? "";
+            return "";
+        }
+        static bool? B(System.Text.Json.JsonElement e, params string[] keys)
+        {
+            foreach (var k in keys)
+                if (e.TryGetProperty(k, out var v))
+                {
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+                    if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+                }
+            return null;
+        }
+        static int? I(System.Text.Json.JsonElement e, params string[] keys)
+        {
+            foreach (var k in keys)
+                if (e.TryGetProperty(k, out var v) && v.TryGetInt32(out var n)) return n;
+            return null;
+        }
+        cfg.ApplyMailSimple(
+            B(mail, "Acik", "Enabled"),
+            S(mail, "SmtpSunucu", "SmtpHost", "Host"),
+            I(mail, "SmtpPort", "Port"),
+            B(mail, "Ssl", "SmtpSsl"),
+            S(mail, "Kimden", "From", "MailFrom"),
+            S(mail, "Kime", "To", "MailTo"),
+            S(mail, "SmtpKullanici", "SmtpUser", "User"),
+            S(mail, "SmtpParola", "SmtpPassword", "Password"),
+            B(mail, "BasaridaGonder", "MailOnSuccess", "OnSuccess"),
+            B(mail, "HatadaGonder", "MailOnFailure", "OnFailure"));
     }
 
     static int RunHeadless()
@@ -84,7 +129,7 @@ static class Program
         {
             Logger.Info("Zamanlanmış/komut satırı yedeklemesi başlatıldı (--backup).");
             var cfg = AppConfig.Load();
-            var job = new BackupEngine(cfg).Run();
+            var job = new BackupEngine(cfg).Run(); // includes best-effort MailNotifier
             EventLogWriter.Write(job.AllOk, job.AllOk
                 ? $"SQL yedekleme başarılı: {job.Ok} veritabanı. Hedef: {cfg.DriveTargetFolder}"
                 : "SQL yedekleme BAŞARISIZ. " + job.Summary + Environment.NewLine +
@@ -97,6 +142,14 @@ static class Program
         {
             Logger.Error("Beklenmeyen hata: " + ex);
             EventLogWriter.Write(false, "SQL yedekleme beklenmeyen hata: " + ex.Message);
+            try
+            {
+                var cfg = AppConfig.Load();
+                var fail = new JobResult();
+                fail.Items.Add(new DbResult("(genel)", false, false, ex.Message, null));
+                MailNotifier.NotifyBackup(cfg, fail);
+            }
+            catch { /* mail must never mask primary error */ }
             ShowBalloon("Yedekleme HATASI", ex.Message, ToolTipIcon.Error);
             return 2;
         }

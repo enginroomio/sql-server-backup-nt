@@ -55,6 +55,19 @@ public class AppConfig
     public bool? LastJobOk { get; set; }
     public string LastJobSummary { get; set; } = "";
 
+    // ---- E-posta bildirimi (isteğe bağlı; basit-ayarlar.json → Eposta) ----
+    public bool MailEnabled { get; set; } = false;
+    public string SmtpHost { get; set; } = "";
+    public int SmtpPort { get; set; } = 587;
+    public bool SmtpSsl { get; set; } = true;
+    public string MailFrom { get; set; } = "";
+    public string MailTo { get; set; } = "";
+    public string SmtpUser { get; set; } = "";
+    /// <summary>SMTP password, DPAPI protected. Never plaintext in config/logs.</summary>
+    public string SmtpPasswordEnc { get; set; } = "";
+    public bool MailOnSuccess { get; set; } = true;
+    public bool MailOnFailure { get; set; } = true;
+
     static System.Security.Cryptography.DataProtectionScope ScopeOf(string s) =>
         s == "LocalMachine" ? System.Security.Cryptography.DataProtectionScope.LocalMachine : System.Security.Cryptography.DataProtectionScope.CurrentUser;
     public string RequiredScope => Mode == TaskMode.SystemAccount ? "LocalMachine" : "CurrentUser";
@@ -73,15 +86,18 @@ public class AppConfig
     public string? GetPassword() => Unprotect(EncryptedPassword, "Şifreleme parolası");
     public void SetSqlPassword(string? plain) => SqlPasswordEnc = Protect(plain);
     public string? GetSqlPassword() => Unprotect(SqlPasswordEnc, "SQL oturum parolası");
+    public void SetSmtpPassword(string? plain) => SmtpPasswordEnc = Protect(plain);
+    public string? GetSmtpPassword() => Unprotect(SmtpPasswordEnc, "SMTP parolası");
 
     /// <summary>Re-encrypt stored secrets when the task mode requires a different DPAPI scope.</summary>
     public void EnsureSecretScope()
     {
         if (SecretScope == RequiredScope) return;
-        var zip = GetPassword(); var sql = GetSqlPassword();
+        var zip = GetPassword(); var sql = GetSqlPassword(); var smtp = GetSmtpPassword();
         SecretScope = RequiredScope;
         EncryptedPassword = Protect(zip);
         SqlPasswordEnc = Protect(sql);
+        SmtpPasswordEnc = Protect(smtp);
         Logger.Info($"Kayıtlı parolalar yeni DPAPI kapsamıyla yeniden şifrelendi: {SecretScope}");
     }
 
@@ -140,6 +156,7 @@ public class AppConfig
         if (string.IsNullOrWhiteSpace(StagingFolder)) StagingFolder = Paths.DefaultStaging;
         if (!PathSafety.IsSafeStagingPath(StagingFolder)) StagingFolder = Paths.DefaultStaging;
         if (SecretScope != "LocalMachine") SecretScope = "CurrentUser";
+        if (SmtpPort < 1 || SmtpPort > 65535) SmtpPort = 587;
         LastResults ??= new();
     }
 
@@ -164,7 +181,7 @@ public class AppConfig
         }
     }
 
-    /// <summary>Apply the 4 simple end-user settings (server, backup folder, retention count, schedule time).</summary>
+    /// <summary>Apply the core end-user settings (server, backup folder, retention count, schedule time).</summary>
     public void ApplySimple(string instance, string backupFolder, int retention, string time)
     {
         if (!string.IsNullOrWhiteSpace(instance)) InstanceName = instance.Trim();
@@ -175,6 +192,25 @@ public class AppConfig
         }
         if (retention >= 1 && retention <= 365) RetentionDays = retention;
         if (TimeSpan.TryParse(time, out _)) BackupTime = time.Trim();
+        Normalize();
+    }
+
+    /// <summary>Optional mail block from basit-ayarlar.json. Empty SmtpParola keeps the previously stored DPAPI secret.</summary>
+    public void ApplyMailSimple(
+        bool? enabled, string? host, int? port, bool? ssl,
+        string? from, string? to, string? user, string? passwordPlain,
+        bool? onSuccess, bool? onFailure)
+    {
+        if (enabled.HasValue) MailEnabled = enabled.Value;
+        if (host != null) SmtpHost = host.Trim();
+        if (port is >= 1 and <= 65535) SmtpPort = port.Value;
+        if (ssl.HasValue) SmtpSsl = ssl.Value;
+        if (from != null) MailFrom = from.Trim();
+        if (to != null) MailTo = to.Trim();
+        if (user != null) SmtpUser = user.Trim();
+        if (!string.IsNullOrEmpty(passwordPlain)) SetSmtpPassword(passwordPlain);
+        if (onSuccess.HasValue) MailOnSuccess = onSuccess.Value;
+        if (onFailure.HasValue) MailOnFailure = onFailure.Value;
         Normalize();
     }
 }

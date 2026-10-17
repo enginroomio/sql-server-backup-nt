@@ -156,6 +156,8 @@ public class BackupEngine
         _cfg.LastJobSummary = job.Summary;
         try { _cfg.Save(); } catch (Exception ex) { Logger.Warn("Ayarlar kaydedilemedi: " + ex.Message); }
         (job.AllOk ? (Action<string>)Logger.Success : Logger.Error)("=== " + job.Summary + " ===");
+        // Best-effort mail: never alters job result / exit code (scheduled, --backup, Test Yedeği).
+        MailNotifier.NotifyBackup(_cfg, job);
         Logger.Cleanup();
         return job;
     }

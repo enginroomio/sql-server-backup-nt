@@ -6,8 +6,9 @@ Kısa, son kullanıcı / yönetici odaklı özet.
 
 | Konu | Davranış |
 |------|----------|
-| Parolalar | ZIP ve SQL parolaları `config.json` içinde **düz metin değil**; Windows DPAPI ile şifreli |
-| Günlükler | Parola / bağlantı dizesi yazılmaz |
+| Parolalar | ZIP, SQL ve **SMTP** parolaları `config.json` içinde **düz metin değil**; Windows DPAPI ile şifreli |
+| Günlükler | Parola / bağlantı dizesi / SMTP credential yazılmaz (yalnızca host:port ve alıcı) |
+| E-posta | Best-effort; gönderim hatası yedekleme sonucunu bozmaz |
 | SQL betiği | Veritabanı adları `QUOTENAME`; staging/ad allowlist + quote kaçışı |
 | Silme | Yalnızca `{DB}_yyyyMMdd_HHmmss.zip`, yalnızca `SQLBackup` / `Staging` klasörlerinde |
 | Kurulum betikleri | `Invoke-Expression` yok |
@@ -32,7 +33,9 @@ Kısa, son kullanıcı / yönetici odaklı özet.
 2. Şifreleme: açık (parolayı güvenli yerde saklayın).
 3. SQL: Windows auth veya kısıtlı SQL login (`db_backupoperator`).
 4. Mod: oturum hep açıksa Interactive; değilse NoLogon veya SYSTEM+SQL auth.
+5. E-posta: `basit-ayarlar.json` → `Eposta.Acik=true`; SMTP parolasını uyguladıktan sonra JSON’dan silin.
 
 ## Test / CI
 
-Gerçek Windows+SQL duman testi: `.github/workflows/windows-sql-smoke.yml` (ücretsiz `windows-latest` + LocalDB, **repo secret gerekmez**).
+Gerçek Windows+SQL duman testi: `.github/workflows/windows-sql-smoke.yml` (ücretsiz `windows-latest` + LocalDB, **repo secret gerekmez**).  
+SMTP smoke CI’da yok (ücretli/harici SMTP gerekir) — Windows’ta `Eposta.Acik=true` ile bir Test Yedeği alın.

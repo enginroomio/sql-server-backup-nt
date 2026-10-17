@@ -34,17 +34,27 @@ def main() -> int:
         "src/BackupEngine.cs",
         "src/SQLYedeklemeAraci.csproj",
         "src/ServerUi.cs",
+        "src/MailNotifier.cs",
         ".github/workflows/windows-sql-smoke.yml",
     ]
     for rel in required:
         check((ROOT / rel).is_file(), f"exists: {rel}")
 
-    # basit-ayarlar.json — exactly the 4 end-user knobs
+    # basit-ayarlar.json — core knobs + optional Eposta
     simple = json.loads((ROOT / "basit-ayarlar.json").read_text(encoding="utf-8"))
     for key in ("Sunucu", "YedekKlasoru", "SaklamaAdedi", "Saat"):
         check(key in simple, f"basit-ayarlar has {key}")
     check(isinstance(simple.get("SaklamaAdedi"), int) and 1 <= simple["SaklamaAdedi"] <= 365, "SaklamaAdedi in 1..365")
     check(bool(re.fullmatch(r"\d{1,2}:\d{2}", str(simple.get("Saat", "")))), "Saat looks like HH:mm")
+    mail = simple.get("Eposta") or {}
+    check(isinstance(mail, dict), "basit-ayarlar has Eposta object")
+    for key in ("Acik", "SmtpSunucu", "SmtpPort", "Kimden", "Kime", "BasaridaGonder"):
+        check(key in mail, f"Eposta has {key}")
+    check(mail.get("Acik") is False, "Eposta.Acik defaults to false (no surprise mail)")
+    check(isinstance(mail.get("SmtpPort"), int) and 1 <= mail["SmtpPort"] <= 65535, "SmtpPort valid")
+    # Sample JSON must not ship a real-looking secret
+    check(not str(mail.get("SmtpParola") or "").strip() or mail.get("SmtpParola") in ("", "SMTP_PAROLANIZ"),
+          "sample SmtpParola empty or placeholder")
 
     sql = (ROOT / "backup.master.sql").read_text(encoding="utf-8", errors="replace")
     for token in ("$(StagingDir)", "$(Timestamp)", "$(OnlyDb)", "BACKUP DATABASE", "RESTORE VERIFYONLY", "QUOTENAME"):
@@ -57,15 +67,26 @@ def main() -> int:
     check("RegisterNoLogonSafe" in core, "NoLogon password not on schtasks argv")
     check("/RP" not in core or "RegisterNoLogonSafe" in core, "schtasks /RP avoided for NoLogon")
     check('@"C:\\SQLBackup"' in core or r'"C:\SQLBackup"' in core, "Server default backup path")
+    check("SmtpPasswordEnc" in core and "SetSmtpPassword" in core, "SMTP password DPAPI fields")
+    check("ApplyMailSimple" in core, "ApplyMailSimple present")
 
     engine = (ROOT / "src/BackupEngine.cs").read_text(encoding="utf-8", errors="replace")
     check("IsUnderRoot" in engine, "bak path traversal guard")
     check("IsSafeDbName" in engine, "db name allowlist")
     check("IsSafeStagingPath" in engine, "staging path allowlist")
+    check("MailNotifier.NotifyBackup" in engine, "backup calls MailNotifier")
+
+    mail_cs = (ROOT / "src/MailNotifier.cs").read_text(encoding="utf-8", errors="replace")
+    check("yedekleme başarılı" in mail_cs, "success mail contains Turkish phrase")
+    check("SmtpPassword" not in mail_cs or "GetSmtpPassword" in mail_cs, "mail uses GetSmtpPassword not raw field log")
+    check("Logger.Info" in mail_cs and "SmtpPasswordEnc" not in mail_cs, "mail logs host not encrypted blob")
+    check("never" in mail_cs.lower() or "değişmedi" in mail_cs or "best-effort" in mail_cs.lower()
+          or "yedekleme sonucu değişmedi" in mail_cs, "mail failure is best-effort")
 
     prog = (ROOT / "src/Program.cs").read_text(encoding="utf-8", errors="replace")
     check("--apply-basit" in prog, "headless basit apply switch")
     check("--backup" in prog, "headless backup switch")
+    check("ApplyMailFromBasit" in prog, "basit apply reads Eposta")
 
     # setup.ps1: no Invoke-Expression
     setup = (ROOT / "setup.ps1").read_text(encoding="utf-8", errors="replace")

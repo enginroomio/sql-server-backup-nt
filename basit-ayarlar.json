@@ -2,5 +2,17 @@
   "Sunucu": ".\\SQLEXPRESS",
   "YedekKlasoru": "C:\\SQLBackup",
   "SaklamaAdedi": 7,
-  "Saat": "02:00"
+  "Saat": "02:00",
+  "Eposta": {
+    "Acik": false,
+    "SmtpSunucu": "smtp.ornek.com",
+    "SmtpPort": 587,
+    "Ssl": true,
+    "Kimden": "yedek@ornek.com",
+    "Kime": "yonetici@ornek.com",
+    "SmtpKullanici": "",
+    "SmtpParola": "",
+    "BasaridaGonder": true,
+    "HatadaGonder": true
+  }
 }
