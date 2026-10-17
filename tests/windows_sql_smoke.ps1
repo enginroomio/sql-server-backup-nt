@@ -156,6 +156,26 @@ $cfg.LocalFolder = $backupRoot
 $cfg.InstanceName = $instance
 $cfg | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
+# Preflight: edition + direct BACKUP without COMPRESSION (surfaces real SQL errors, not only 3013)
+Write-Host "==> sqlcmd LocalDB diagnostic" -ForegroundColor Cyan
+$diagBak = Join-Path $staging ("CiDiag_" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".bak")
+$diagSql = @"
+SET NOCOUNT ON;
+SELECT CAST(SERVERPROPERTY('Edition') AS nvarchar(128)) AS Edition,
+       CAST(SERVERPROPERTY('EngineEdition') AS int) AS EngineEdition,
+       SUSER_SNAME() AS LoginName;
+BACKUP DATABASE [CiBackupTest] TO DISK = N'$($diagBak.Replace("'","''"))' WITH INIT, CHECKSUM;
+"@
+& $sqlcmd -S $instance -E -b -Q $diagSql | Out-Host
+$diagExit = $LASTEXITCODE
+Write-Host "sqlcmd diagnostic exit: $diagExit (bak=$diagBak)"
+if (Test-Path -LiteralPath $diagBak) {
+    Write-Host "diagnostic bak size: $((Get-Item -LiteralPath $diagBak).Length) bytes"
+    Remove-Item -LiteralPath $diagBak -Force -ErrorAction SilentlyContinue
+} elseif ($diagExit -ne 0) {
+    Write-Host "WARNING: raw LocalDB BACKUP failed before app --backup (see sqlcmd output above)" -ForegroundColor Yellow
+}
+
 Write-Host "==> Run headless backup" -ForegroundColor Cyan
 $backupExit = Invoke-WinExe -FilePath $exe -ArgumentList @('--backup')
 Write-Host "backup exit code: $backupExit"
@@ -168,6 +188,8 @@ if (Test-Path -LiteralPath $zipDir) {
 Write-Host "Zips found: $($zips.Count) in $zipDir"
 if ($backupExit -ne 0 -or $zips.Count -lt 1) {
     Write-Host "---- config ----"; Get-Content $cfgPath -ErrorAction SilentlyContinue
+    Write-Host "---- staging listing ----"
+    if (Test-Path -LiteralPath $staging) { Get-ChildItem -LiteralPath $staging -Force | Format-Table Name, Length, LastWriteTime | Out-String | Write-Host }
     Write-Host "---- logs ----"
     $logDir = Join-Path $cfgDir 'logs'
     if (Test-Path $logDir) { Get-ChildItem $logDir | ForEach-Object { Write-Host $_.FullName; Get-Content $_.FullName -Tail 80 } }

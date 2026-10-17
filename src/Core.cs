@@ -581,14 +581,22 @@ public static class Staging
 {
     /// <summary>Create staging folder and restrict ACL to current user + SYSTEM (+ SQL service account, which
     /// must write the .bak — without it BACKUP TO DISK fails). Non-fatal on failure.
-    /// LocalDB has no NT Service\MSSQL$* account (runs as the calling user) — skip that grant.</summary>
+    /// LocalDB runs as the calling user (no NT Service\MSSQL$*): skip icacls entirely so inherited
+    /// ProgramData/user ACLs are left alone — lockdown has caused BACKUP 3013 on CI runners.</summary>
     public static void Ensure(AppConfig cfg)
     {
         try
         {
-            bool created = !Directory.Exists(cfg.StagingFolder);
             Directory.CreateDirectory(cfg.StagingFolder);
-            if (!created && File.Exists(Path.Combine(cfg.StagingFolder, ".acl_ok"))) return;
+            var isLocalDb = cfg.InstanceName.Contains("localdb", StringComparison.OrdinalIgnoreCase)
+                || cfg.InstanceName.Contains("MSSQLLocalDB", StringComparison.OrdinalIgnoreCase);
+            if (isLocalDb)
+            {
+                Logger.Info("Geçici klasör hazır (LocalDB: ACL sıkılaştırma atlandı — kullanıcı bağlamında çalışır).");
+                return;
+            }
+
+            if (File.Exists(Path.Combine(cfg.StagingFolder, ".acl_ok"))) return;
             var user = $"{Environment.UserDomainName}\\{Environment.UserName}";
             // Base grants first — never bundle a possibly-missing SQL service SID in the same icacls
             // call (one bad account makes the whole command fail and can leave a broken DACL).
@@ -596,14 +604,6 @@ public static class Staging
             if (!RunIcacls(baseArgs, out var baseOut))
             {
                 Logger.Warn($"Geçici klasör izinleri ayarlanamadı: {baseOut} — setup.bat'i tekrar çalıştırın.");
-                return;
-            }
-
-            var isLocalDb = cfg.InstanceName.Contains("localdb", StringComparison.OrdinalIgnoreCase);
-            if (isLocalDb)
-            {
-                File.WriteAllText(Path.Combine(cfg.StagingFolder, ".acl_ok"), DateTime.Now.ToString("s"));
-                Logger.Info("Geçici klasör izinleri kısıtlandı (LocalDB: kullanıcı + SYSTEM).");
                 return;
             }
 

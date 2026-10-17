@@ -1,8 +1,10 @@
 /* =====================================================================
    SUNUCU / SÜRÜM NOTLARI
    * Her SQL Server sürümünde çalışır (Express, Web, Standard, Enterprise, Developer).
-   * WITH COMPRESSION Express'te desteklenmez (hata 1844); bu durumda betik
-     otomatik olarak sıkıştırmasız yedeğe geçer (uygulama ayrıca ZIP'ler).
+   * WITH COMPRESSION Express / LocalDB'de desteklenmez (hata 1844; çoğu
+     zaman CATCH'te 3013 olarak görünür). Betik Express'te sıkıştırmayı
+     atlar; diğer sürümlerde 1844/3013 olursa sıkıştırmasız dener.
+     Uygulama ayrıca ZIP ile sıkıştırır.
    * Örnekten bağımsızdır: varsayılan örnek (MSSQLSERVER / "(local)") veya
      adlandırılmış örnek (.\SQLEXPRESS, .\DIGER) için aynı betik kullanılır.
    * Elle çalıştırma alternatifi:
@@ -29,9 +31,9 @@
      * Sistem veritabanları (master, model, msdb, tempdb) HARİÇ tutulur.
      * Çevrimdışı (OFFLINE), salt okunur (READ_ONLY) ve anlık görüntü
        (snapshot) veritabanları atlanır ve sonuçta "ATLANDI" olarak raporlanır.
-     * Her veritabanı WITH COMPRESSION, INIT, CHECKSUM ile yedeklenir.
-       SQL Server Express sıkıştırmayı desteklemiyorsa (hata 1844)
-       sıkıştırmasız tekrar denenir (uygulama ardından ZIP ile sıkıştırır).
+     * Express/LocalDB (EngineEdition=4): sıkıştırmasız BACKUP.
+       Diğer sürümler: önce WITH COMPRESSION; 1844 veya 3013 (sıkıştırma
+       hatasını saran genel kod) olursa sıkıştırmasız tekrar.
      * Her yedek RESTORE VERIFYONLY ... WITH CHECKSUM ile doğrulanır
        ("güvenli yedek" garantisi).
      * Bir veritabanındaki hata diğerlerini durdurmaz.
@@ -59,6 +61,8 @@ WHERE d.database_id > 4
   AND (d.state <> 0 OR d.is_read_only = 1 OR d.source_database_id IS NOT NULL);
 
 DECLARE @db SYSNAME, @file NVARCHAR(600), @sql NVARCHAR(MAX), @err NVARCHAR(4000);
+-- EngineEdition 4 = Express (LocalDB dahil). COMPRESSION desteklenmez.
+DECLARE @IsExpress BIT = CASE WHEN CAST(SERVERPROPERTY('EngineEdition') AS INT) = 4 THEN 1 ELSE 0 END;
 
 DECLARE db_cursor CURSOR LOCAL FAST_FORWARD FOR
     SELECT d.name FROM sys.databases d
@@ -79,15 +83,25 @@ BEGIN
             N'\',N'_'),N'/',N'_'),N':',N'_'),N'*',N'_'),N'?',N'_'),N'"',N'_'),N'<',N'_'),N'>',N'_'),N'|',N'_')
         + N'_' + @Timestamp + N'.bak';
     BEGIN TRY
-        BEGIN TRY
-            SET @sql = N'BACKUP DATABASE ' + QUOTENAME(@db) + N' TO DISK = @f WITH COMPRESSION, INIT, CHECKSUM, NAME = @n;';
-            EXEC sp_executesql @sql, N'@f NVARCHAR(600), @n NVARCHAR(200)', @f = @file, @n = @db;
-        END TRY
-        BEGIN CATCH
-            IF ERROR_NUMBER() <> 1844 THROW;  -- 1844: bu sürüm sıkıştırmayı desteklemiyor (Express)
+        IF @IsExpress = 1
+        BEGIN
+            -- Express/LocalDB: sıkıştırma yok (1844); CATCH'te sıkça yalnızca 3013 görünür.
             SET @sql = N'BACKUP DATABASE ' + QUOTENAME(@db) + N' TO DISK = @f WITH INIT, CHECKSUM, NAME = @n;';
             EXEC sp_executesql @sql, N'@f NVARCHAR(600), @n NVARCHAR(200)', @f = @file, @n = @db;
-        END CATCH;
+        END
+        ELSE
+        BEGIN
+            BEGIN TRY
+                SET @sql = N'BACKUP DATABASE ' + QUOTENAME(@db) + N' TO DISK = @f WITH COMPRESSION, INIT, CHECKSUM, NAME = @n;';
+                EXEC sp_executesql @sql, N'@f NVARCHAR(600), @n NVARCHAR(200)', @f = @file, @n = @db;
+            END TRY
+            BEGIN CATCH
+                -- 1844 = sıkıştırma yok; 3013 çoğu zaman gerçek hatayı saran genel BACKUP kodu.
+                IF ERROR_NUMBER() NOT IN (1844, 3013) THROW;
+                SET @sql = N'BACKUP DATABASE ' + QUOTENAME(@db) + N' TO DISK = @f WITH INIT, CHECKSUM, NAME = @n;';
+                EXEC sp_executesql @sql, N'@f NVARCHAR(600), @n NVARCHAR(200)', @f = @file, @n = @db;
+            END CATCH;
+        END
 
         -- Doğrulama: yedek dosyası okunabilir ve sağlam mı?
         RESTORE VERIFYONLY FROM DISK = @file WITH CHECKSUM;
