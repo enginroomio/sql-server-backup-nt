@@ -64,11 +64,32 @@ if (-not $localdb) {
 }
 if (-not $localdb) { throw "SqlLocalDB.exe still not found after install attempt." }
 
-& $localdb info MSSQLLocalDB 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    & $localdb create MSSQLLocalDB -s | Out-Null
+function Ensure-LocalDbRunning {
+    param([Parameter(Mandatory)] [string] $Exe)
+    Write-Host "Ensuring LocalDB instance MSSQLLocalDB is running via $Exe"
+    & $Exe info MSSQLLocalDB 2>$null | Out-Null
+    $exists = ($LASTEXITCODE -eq 0)
+    if (-not $exists) {
+        & $Exe create MSSQLLocalDB -s | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "sqllocaldb create failed ($LASTEXITCODE)" }
+    }
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        & $Exe start MSSQLLocalDB 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "LocalDB start ok (attempt $attempt)"
+            return
+        }
+        Write-Host "LocalDB start failed (attempt $attempt, exit=$LASTEXITCODE) — recreate + retry"
+        & $Exe stop MSSQLLocalDB 2>$null | Out-Null
+        & $Exe delete MSSQLLocalDB 2>$null | Out-Null
+        Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+        & $Exe create MSSQLLocalDB -s | Out-Host
+        if ($LASTEXITCODE -ne 0) { Write-Host "create exit=$LASTEXITCODE" }
+    }
+    throw "LocalDB would not start after retries"
 }
-& $localdb start MSSQLLocalDB | Out-Null
+
+Ensure-LocalDbRunning -Exe $localdb
 Write-Host "LocalDB ready via $localdb"
 
 $sqlcmd = Find-SqlCmd
@@ -76,8 +97,15 @@ if (-not $sqlcmd) { throw "sqlcmd.exe not found (needed to create CI test DB)." 
 
 $instance = '(localdb)\MSSQLLocalDB'
 Write-Host "==> Create CI database on $instance" -ForegroundColor Cyan
-& $sqlcmd -S $instance -E -Q "IF DB_ID(N'CiBackupTest') IS NULL CREATE DATABASE [CiBackupTest];" | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "CREATE DATABASE failed" }
+$created = $false
+for ($i = 1; $i -le 5; $i++) {
+    & $sqlcmd -S $instance -E -l 15 -Q "IF DB_ID(N'CiBackupTest') IS NULL CREATE DATABASE [CiBackupTest]; SELECT name FROM sys.databases WHERE name=N'CiBackupTest';" | Out-Host
+    if ($LASTEXITCODE -eq 0) { $created = $true; break }
+    Write-Host "sqlcmd CREATE attempt $i failed (exit=$LASTEXITCODE); waiting for LocalDB..."
+    Start-Sleep -Seconds (3 * $i)
+    & $localdb start MSSQLLocalDB 2>&1 | Out-Host
+}
+if (-not $created) { throw "CREATE DATABASE failed after retries" }
 
 Write-Host "==> dotnet publish (framework-dependent, not self-contained — saves CI minutes)" -ForegroundColor Cyan
 Push-Location (Join-Path $Root 'src')

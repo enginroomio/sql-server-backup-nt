@@ -104,8 +104,23 @@ jobs:
           }
           if (-not $ldb) { throw 'SqlLocalDB.exe not available after Choco/MSI' }
           Write-Host "Using $ldb"
-          & $ldb create MSSQLLocalDB -s 2>$null
-          & $ldb start MSSQLLocalDB
+          # Recreate if start is flaky on hosted images (corrupt auto instance).
+          function Start-LocalDbInstance {
+            param([string]$Exe)
+            & $Exe stop MSSQLLocalDB 2>$null | Out-Null
+            & $Exe delete MSSQLLocalDB 2>$null | Out-Null
+            & $Exe create MSSQLLocalDB -s
+            if ($LASTEXITCODE -ne 0) { throw "sqllocaldb create -s failed ($LASTEXITCODE)" }
+            for ($i = 1; $i -le 6; $i++) {
+              & $Exe start MSSQLLocalDB 2>&1 | Out-Host
+              if ($LASTEXITCODE -eq 0) { return }
+              Write-Host "LocalDB start attempt $i failed; retrying..."
+              Start-Sleep -Seconds (2 * $i)
+              & $Exe stop MSSQLLocalDB 2>$null | Out-Null
+            }
+            throw 'LocalDB failed to start after retries'
+          }
+          Start-LocalDbInstance -Exe $ldb
           & $ldb info MSSQLLocalDB
 
       - name: Windows SQL smoke (build + backup)
