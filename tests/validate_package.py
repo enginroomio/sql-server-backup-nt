@@ -45,7 +45,13 @@ def main() -> int:
         "src/DriveOAuth.cs",
         "src/StartupHelper.cs",
         "src/MailNotifier.cs",
+        "src/ISmtpMailTransport.cs",
+        "src/IDriveUploader.cs",
         "src/SQLYedeklemeAraci.csproj",
+        "SQLYedeklemeAraci.sln",
+        "tests/SQLYedeklemeAraci.Tests/SQLYedeklemeAraci.Tests.csproj",
+        "tests/SQLYedeklemeAraci.Tests/MailNotifierTests.cs",
+        "tests/SQLYedeklemeAraci.Tests/DriveUploaderTests.cs",
         ".github/workflows/windows-sql-smoke.yml",
     ]
     for rel in required:
@@ -81,6 +87,14 @@ def main() -> int:
     drive = (ROOT / "src/DriveApiClient.cs").read_text(encoding="utf-8", errors="replace")
     check("HasDriveUserOAuth" in drive or "FromRefreshToken" in drive, "Drive client supports user OAuth")
     check("UploadZip" in drive and "EnforceRetention" in drive, "upload + retention")
+    check("IsSafeZipFileName" in drive and "ValidateUploadArgs" in drive, "Drive upload preflight for unit tests")
+    check("IDriveUploader" in drive, "DriveApiClient implements IDriveUploader")
+
+    idrive = (ROOT / "src/IDriveUploader.cs").read_text(encoding="utf-8", errors="replace")
+    check("FakeDriveUploader" in idrive and "class FakeDriveUploader" in idrive, "FakeDriveUploader for CI")
+
+    mail = (ROOT / "src/MailNotifier.cs").read_text(encoding="utf-8", errors="replace")
+    check("ISmtpMailTransport" in mail and "Transport" in mail, "MailNotifier injectable transport")
 
     engine = (ROOT / "src/BackupEngine.cs").read_text(encoding="utf-8", errors="replace")
     check("RequiresDriveApiUpload" in engine, "engine uploads when API dest")
@@ -93,18 +107,27 @@ def main() -> int:
     prog = (ROOT / "src/Program.cs").read_text(encoding="utf-8", errors="replace")
     check("DriveMail" in prog and "SqlSunucu" in prog, "ApplyBasit reads Aze fields")
     check("StartupHelper.Apply" in prog, "apply enables Windows startup")
+    check("--apply-basit" in prog and "--backup" in prog, "headless CLI flags (GUI N/A in CI)")
 
     csproj = (ROOT / "src/SQLYedeklemeAraci.csproj").read_text(encoding="utf-8")
     check("Google.Apis.Drive.v3" in csproj and "Google.Apis.Auth" in csproj, "Drive NuGet refs")
+
+    unit = (ROOT / "tests/SQLYedeklemeAraci.Tests/MailNotifierTests.cs").read_text(encoding="utf-8", errors="replace")
+    check("CapturingSmtpTransport" in unit or "ISmtpMailTransport" in unit, "SMTP unit tests use sink")
+    drive_ut = (ROOT / "tests/SQLYedeklemeAraci.Tests/DriveUploaderTests.cs").read_text(encoding="utf-8", errors="replace")
+    check("FakeDriveUploader" in drive_ut, "Drive unit tests use FakeDriveUploader")
 
     hizli = (ROOT / "HIZLI_BASLANGIC.md").read_text(encoding="utf-8", errors="replace")
     check("Aze" in hizli and "uygulama şifresi" in hizli and "Google Drive'ı Bağla" in hizli, "hızlı başlangıç Aze checklist")
 
     smoke = (ROOT / "tests/windows_sql_smoke.ps1").read_text(encoding="utf-8", errors="replace")
     check("Yerel" in smoke, "GHA smoke stays Yerel (no Drive secrets)")
+    check("--apply-basit" in smoke and "--backup" in smoke, "smoke runs headless apply+backup")
 
     wf = (ROOT / ".github/workflows/windows-sql-smoke.yml").read_text(encoding="utf-8", errors="replace")
     check("windows-2022" in wf or "windows-latest" in wf, "windows-2022 (or latest) runner")
+    check("build-and-unit" in wf and "dotnet test" in wf, "explicit build-and-unit job")
+    check("dotnet build" in wf, "explicit dotnet build step")
     secret_refs = re.findall(r"secrets\.[A-Za-z0-9_]+", wf)
     check(all(s == "secrets.GITHUB_TOKEN" for s in secret_refs), "no custom GHA secrets")
 

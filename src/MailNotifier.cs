@@ -10,6 +10,9 @@ namespace SqlBackupTool;
 /// </summary>
 public static class MailNotifier
 {
+    /// <summary>Replace in unit tests with a capturing sink (no real SMTP / secrets).</summary>
+    public static ISmtpMailTransport Transport { get; set; } = new NetworkSmtpTransport();
+
     public static bool IsConfigured(AppConfig cfg) =>
         cfg.MailEnabled
         && !string.IsNullOrWhiteSpace(cfg.SmtpHost)
@@ -83,26 +86,16 @@ public static class MailNotifier
         foreach (var addr in cfg.MailTo.Split(new[] { ';', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries))
             msg.To.Add(addr.Trim());
 
-        using var client = new SmtpClient(cfg.SmtpHost.Trim(), cfg.SmtpPort)
-        {
-            EnableSsl = cfg.SmtpSsl,
-            DeliveryMethod = SmtpDeliveryMethod.Network,
-            Timeout = 30000
-        };
-
+        NetworkCredential? creds = null;
         if (!string.IsNullOrWhiteSpace(cfg.SmtpUser))
         {
             var pwd = cfg.GetSmtpPassword() ?? "";
-            client.Credentials = new NetworkCredential(cfg.SmtpUser.Trim(), pwd);
+            creds = new NetworkCredential(cfg.SmtpUser.Trim(), pwd);
             // do not log pwd / credential object
-        }
-        else
-        {
-            client.UseDefaultCredentials = false;
         }
 
         Logger.Info($"E-posta gönderiliyor → {cfg.MailTo} (SMTP {cfg.SmtpHost}:{cfg.SmtpPort}, SSL={cfg.SmtpSsl})…");
-        client.Send(msg);
+        Transport.Send(msg, cfg.SmtpHost.Trim(), cfg.SmtpPort, cfg.SmtpSsl, creds);
         Logger.Success(ok
             ? "E-posta bildirimi gönderildi: yedekleme başarılı."
             : "E-posta bildirimi gönderildi: yedekleme hatası.");
