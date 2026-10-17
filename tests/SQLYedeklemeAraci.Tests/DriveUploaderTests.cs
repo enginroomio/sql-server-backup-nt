@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace SqlBackupTool.Tests;
 
 public class DriveUploaderTests
