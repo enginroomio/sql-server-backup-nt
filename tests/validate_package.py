@@ -72,12 +72,17 @@ def main() -> int:
     check('@"C:\\SQLBackup"' in core or r'"C:\SQLBackup"' in core, "Server default backup path")
     check("SmtpPasswordEnc" in core and "SetSmtpPassword" in core, "SMTP password DPAPI fields")
     check("ApplyMailSimple" in core, "ApplyMailSimple present")
+    check("ApplyDestination" in core, "ApplyDestination present")
+    check("LooksLikeGoogleDrivePath" in core, "Drive path ACL skip helper")
+    check('DestKind.GoogleDrive' in core, "GoogleDrive destination enum used")
 
     engine = (ROOT / "src/BackupEngine.cs").read_text(encoding="utf-8", errors="replace")
     check("IsUnderRoot" in engine, "bak path traversal guard")
     check("IsSafeDbName" in engine, "db name allowlist")
     check("IsSafeStagingPath" in engine, "staging path allowlist")
     check("MailNotifier.NotifyBackup" in engine, "backup calls MailNotifier")
+    check("BACKUP" in (ROOT / "backup.master.sql").read_text(encoding="utf-8"), "SQL BACKUP remains source")
+    check("never skip SQL" in engine.lower() or "SQL BACKUP" in engine, "engine documents SQL→Drive flow")
 
     mail_cs = (ROOT / "src/MailNotifier.cs").read_text(encoding="utf-8", errors="replace")
     check("yedekleme başarılı" in mail_cs, "success mail contains Turkish phrase")
@@ -90,6 +95,10 @@ def main() -> int:
     check("--apply-basit" in prog, "headless basit apply switch")
     check("--backup" in prog, "headless backup switch")
     check("ApplyMailFromBasit" in prog, "basit apply reads Eposta")
+    check("ApplyDestination" in prog, "basit apply sets destination")
+    check("GoogleDrive" in prog, "basit defaults/mentions GoogleDrive")
+    check("Yerel" in (ROOT / "tests/windows_sql_smoke.ps1").read_text(encoding="utf-8"),
+          "GHA smoke forces Hedef=Yerel (no Drive secrets)")
 
     # setup.ps1: no Invoke-Expression
     setup = (ROOT / "setup.ps1").read_text(encoding="utf-8", errors="replace")
