@@ -27,7 +27,7 @@ public static class Paths
 
 /// <summary>Scheduled-task run modes.</summary>
 public enum TaskMode { Interactive = 0, NoLogon = 1, SystemAccount = 2 }
-public enum DestKind { GoogleDrive = 0, LocalOrNetwork = 1 }
+public enum DestKind { GoogleDrive = 0, LocalOrNetwork = 1, GoogleDriveApi = 2 }
 
 public class AppConfig
 {
@@ -68,6 +68,26 @@ public class AppConfig
     public bool MailOnSuccess { get; set; } = true;
     public bool MailOnFailure { get; set; } = true;
 
+    // ---- Google Drive API (oturumsuz sunucu; service account JSON) ----
+    /// <summary>Path to service-account JSON (optional after first apply if DriveApiKeyEnc set).</summary>
+    public string DriveApiKeyPath { get; set; } = "";
+    /// <summary>Entire service-account JSON, DPAPI protected. Never log.</summary>
+    public string DriveApiKeyEnc { get; set; } = "";
+    /// <summary>Drive folder ID from URL (.../folders/THIS_ID).</summary>
+    public string DriveApiFolderId { get; set; } = "";
+    /// <summary>Optional Workspace impersonation email (advanced; leave empty for shared-folder SA).</summary>
+    public string DriveApiImpersonate { get; set; } = "";
+    /// <summary>Aze-like: Google account email (display + confirmation mail).</summary>
+    public string DriveMail { get; set; } = "";
+    /// <summary>Aze-like: Google app password for Gmail SMTP confirmation (DPAPI). Not used as Drive API password.</summary>
+    public string DriveAppPasswordEnc { get; set; } = "";
+    /// <summary>OAuth refresh token for Drive API (DPAPI). Obtained via browser once — survives reboot / NoLogon.</summary>
+    public string DriveRefreshTokenEnc { get; set; } = "";
+    /// <summary>OAuth client_secret.json path (Desktop client). Default under ProgramData.</summary>
+    public string DriveOAuthClientPath { get; set; } = "";
+    /// <summary>Start tray app when Windows user logs on.</summary>
+    public bool StartWithWindows { get; set; } = true;
+
     static System.Security.Cryptography.DataProtectionScope ScopeOf(string s) =>
         s == "LocalMachine" ? System.Security.Cryptography.DataProtectionScope.LocalMachine : System.Security.Cryptography.DataProtectionScope.CurrentUser;
     public string RequiredScope => Mode == TaskMode.SystemAccount ? "LocalMachine" : "CurrentUser";
@@ -88,18 +108,49 @@ public class AppConfig
     public string? GetSqlPassword() => Unprotect(SqlPasswordEnc, "SQL oturum parolası");
     public void SetSmtpPassword(string? plain) => SmtpPasswordEnc = Protect(plain);
     public string? GetSmtpPassword() => Unprotect(SmtpPasswordEnc, "SMTP parolası");
+    public void SetDriveApiKeyJson(string? plain) => DriveApiKeyEnc = Protect(plain);
+    public string? GetDriveApiKeyJson() => Unprotect(DriveApiKeyEnc, "Drive API anahtarı");
+    public void SetDriveAppPassword(string? plain) => DriveAppPasswordEnc = Protect(plain);
+    public string? GetDriveAppPassword() => Unprotect(DriveAppPasswordEnc, "Google uygulama şifresi");
+    public void SetDriveRefreshToken(string? plain) => DriveRefreshTokenEnc = Protect(plain);
+    public string? GetDriveRefreshToken() => Unprotect(DriveRefreshTokenEnc, "Drive OAuth jetonu");
 
     /// <summary>Re-encrypt stored secrets when the task mode requires a different DPAPI scope.</summary>
     public void EnsureSecretScope()
     {
         if (SecretScope == RequiredScope) return;
         var zip = GetPassword(); var sql = GetSqlPassword(); var smtp = GetSmtpPassword();
+        var drive = GetDriveApiKeyJson(); var appPw = GetDriveAppPassword(); var refresh = GetDriveRefreshToken();
         SecretScope = RequiredScope;
         EncryptedPassword = Protect(zip);
         SqlPasswordEnc = Protect(sql);
         SmtpPasswordEnc = Protect(smtp);
+        DriveApiKeyEnc = Protect(drive);
+        DriveAppPasswordEnc = Protect(appPw);
+        DriveRefreshTokenEnc = Protect(refresh);
         Logger.Info($"Kayıtlı parolalar yeni DPAPI kapsamıyla yeniden şifrelendi: {SecretScope}");
     }
+
+    /// <summary>Aze-like: wire Gmail SMTP confirmation from DriveMail + uygulama şifresi.</summary>
+    public void ApplyAzeMailFromDrive()
+    {
+        if (string.IsNullOrWhiteSpace(DriveMail)) return;
+        MailEnabled = true;
+        MailOnSuccess = true;
+        MailOnFailure = true;
+        MailFrom = DriveMail.Trim();
+        MailTo = DriveMail.Trim();
+        SmtpHost = "smtp.gmail.com";
+        SmtpPort = 587;
+        SmtpSsl = true;
+        SmtpUser = DriveMail.Trim();
+        var pw = GetDriveAppPassword();
+        if (!string.IsNullOrEmpty(pw)) SetSmtpPassword(pw);
+    }
+
+    public bool HasDriveUserOAuth => !string.IsNullOrEmpty(GetDriveRefreshToken());
+    public bool HasDriveServiceAccount => !string.IsNullOrEmpty(GetDriveApiKeyJson())
+        || (!string.IsNullOrWhiteSpace(DriveApiKeyPath) && File.Exists(DriveApiKeyPath));
 
     public string ConnectionString
     {
@@ -116,10 +167,26 @@ public class AppConfig
         }
     }
 
-    /// <summary>Root folder of the selected destination (Drive "My Drive" or local/UNC path).</summary>
-    public string DestRoot => Destination == DestKind.LocalOrNetwork ? LocalFolder : DriveFolder;
-    public string DestLabel => Destination == DestKind.LocalOrNetwork ? "Yerel/Ağ klasörü" : "Google Drive";
+    /// <summary>Local cache root for API uploads (ZIP written here, then uploaded).</summary>
+    public string ApiLocalCacheRoot =>
+        !string.IsNullOrWhiteSpace(LocalFolder) ? LocalFolder
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SQLBackupTool", "ApiCache");
+
+    /// <summary>Root folder of the selected destination (Drive sync / local / API local cache).</summary>
+    public string DestRoot => Destination switch
+    {
+        DestKind.LocalOrNetwork => LocalFolder,
+        DestKind.GoogleDriveApi => ApiLocalCacheRoot,
+        _ => DriveFolder
+    };
+    public string DestLabel => Destination switch
+    {
+        DestKind.LocalOrNetwork => "Yerel/Ağ klasörü",
+        DestKind.GoogleDriveApi => "Google Drive API",
+        _ => "Google Drive (senkron)"
+    };
     public string DriveTargetFolder => Path.Combine(DestRoot, "SQLBackup");
+    public bool RequiresDriveApiUpload => Destination == DestKind.GoogleDriveApi;
 
     static readonly JsonSerializerOptions Opts = new() { WriteIndented = true };
 
@@ -194,13 +261,17 @@ public class AppConfig
     }
 
     /// <summary>
-    /// Destination: Google Drive (sync client "My Drive" folder) or local/UNC.
-    /// Architecture stays SQL BACKUP → staging .bak → ZIP → destination\SQLBackup (Drive sync uploads cloud-side).
-    /// Empty driveFolderPath triggers DriveDetector when kind is GoogleDrive.
+    /// Destination: GoogleDrive (sync), Yerel/UNC, or GoogleDriveApi (headless service account).
+    /// Architecture always: SQL BACKUP → staging → ZIP → destination (API upload when GoogleDriveApi).
     /// </summary>
-    public string? ApplyDestination(string? kind, string? driveFolderPath, string? localFolderPath)
+    public string? ApplyDestination(string? kind, string? driveFolderPath, string? localFolderPath,
+        string? apiKeyPath = null, string? apiFolderId = null, string? apiImpersonate = null)
     {
         var k = (kind ?? "").Trim();
+        bool wantApi = k.Equals("GoogleDriveApi", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("DriveApi", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Api", StringComparison.OrdinalIgnoreCase)
+            || k == "2";
         bool wantDrive = k.Equals("GoogleDrive", StringComparison.OrdinalIgnoreCase)
             || k.Equals("Drive", StringComparison.OrdinalIgnoreCase)
             || k.Equals("Google Drive", StringComparison.OrdinalIgnoreCase)
@@ -212,7 +283,37 @@ public class AppConfig
             || k.Equals("UNC", StringComparison.OrdinalIgnoreCase)
             || k == "1";
 
-        if (wantLocal || (!wantDrive && !string.IsNullOrWhiteSpace(localFolderPath) && string.IsNullOrWhiteSpace(k)))
+        if (wantApi)
+        {
+            Destination = DestKind.GoogleDriveApi;
+            if (!string.IsNullOrWhiteSpace(localFolderPath))
+                LocalFolder = localFolderPath.Trim().TrimEnd('\\', '/');
+            if (!string.IsNullOrWhiteSpace(apiFolderId))
+                DriveApiFolderId = apiFolderId.Trim();
+            if (apiImpersonate != null)
+                DriveApiImpersonate = apiImpersonate.Trim();
+            if (!string.IsNullOrWhiteSpace(apiKeyPath))
+            {
+                DriveApiKeyPath = apiKeyPath.Trim();
+                if (!File.Exists(DriveApiKeyPath))
+                    return "Anahtar dosyası bulunamadı: " + DriveApiKeyPath + " — Google service account JSON dosyasını bu yola koyun.";
+                try
+                {
+                    var json = File.ReadAllText(DriveApiKeyPath);
+                    if (json.IndexOf("private_key", StringComparison.OrdinalIgnoreCase) < 0)
+                        return "Anahtar dosyası geçerli bir Google service account JSON gibi görünmüyor.";
+                    SetDriveApiKeyJson(json); // DPAPI; never leave plaintext in config
+                }
+                catch (Exception ex) { return "Anahtar dosyası okunamadı: " + ex.Message; }
+            }
+            // KlasorId optional when user OAuth can auto-create "SQLBackup"; SA mode should set KlasorId or share folder.
+            if (string.IsNullOrEmpty(DriveApiKeyEnc) && (string.IsNullOrWhiteSpace(DriveApiKeyPath) || !File.Exists(DriveApiKeyPath))
+                && string.IsNullOrEmpty(DriveRefreshTokenEnc))
+                return "Google Drive API için AnahtarDosyasi veya (Aze ekranında) Google Drive bağlantısı gerekli.";
+            return null;
+        }
+
+        if (wantLocal || (!wantDrive && !wantApi && !string.IsNullOrWhiteSpace(localFolderPath) && string.IsNullOrWhiteSpace(k)))
         {
             Destination = DestKind.LocalOrNetwork;
             if (!string.IsNullOrWhiteSpace(localFolderPath))
@@ -221,7 +322,7 @@ public class AppConfig
             return null;
         }
 
-        // Default / explicit Google Drive
+        // Default / explicit Google Drive sync client
         Destination = DestKind.GoogleDrive;
         if (!string.IsNullOrWhiteSpace(driveFolderPath))
             DriveFolder = driveFolderPath.Trim().TrimEnd('\\', '/');

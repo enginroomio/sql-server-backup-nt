@@ -9,7 +9,12 @@ public static class ServerUi
         "Oturum açılmadan çalıştır (sunucu; yönetici gerekir)",
         "SYSTEM hesabıyla çalıştır (yalnızca SQL oturum bilgisi ile)"
     };
-    public static readonly string[] DestNames = { "Google Drive (senkron klasörü)", "Yerel / Ağ klasörü (Windows Server)" };
+    public static readonly string[] DestNames =
+    {
+        "Google Drive (senkron klasörü — oturum gerekir)",
+        "Yerel / Ağ klasörü",
+        "Google Drive API (oturumsuz sunucu — anahtar dosyası)"
+    };
 
     /// <summary>Masked one-time prompt for the Windows password. Returned value is never persisted.</summary>
     public static string? AskWindowsPassword(IWin32Window? owner)

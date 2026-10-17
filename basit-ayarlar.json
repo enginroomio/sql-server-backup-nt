@@ -1,20 +1,11 @@
 {
-  "Sunucu": ".\\SQLEXPRESS",
-  "Hedef": "GoogleDrive",
-  "GoogleDriveKlasoru": "",
-  "YedekKlasoru": "C:\\SQLBackup",
-  "SaklamaAdedi": 7,
+  "DriveMail": "sizin@gmail.com",
+  "DriveSifre": "",
   "Saat": "02:00",
-  "Eposta": {
-    "Acik": false,
-    "SmtpSunucu": "smtp.ornek.com",
-    "SmtpPort": 587,
-    "Ssl": true,
-    "Kimden": "yedek@ornek.com",
-    "Kime": "yonetici@ornek.com",
-    "SmtpKullanici": "",
-    "SmtpParola": "",
-    "BasaridaGonder": true,
-    "HatadaGonder": true
-  }
+  "SqlSunucu": ".\\SQLEXPRESS",
+  "SqlKullanici": "",
+  "SqlSifre": "",
+  "SaklamaAdedi": 7,
+  "WindowsIleBaslat": true,
+  "Hedef": "GoogleDriveApi"
 }

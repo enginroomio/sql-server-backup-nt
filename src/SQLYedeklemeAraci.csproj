@@ -14,6 +14,8 @@
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
+    <PackageReference Include="Google.Apis.Drive.v3" Version="1.68.0.3601" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
     <EmbeddedResource Include="..\backup.master.sql" LogicalName="backup.master.sql" />
     <PackageReference Include="SharpZipLib" Version="1.4.2" />

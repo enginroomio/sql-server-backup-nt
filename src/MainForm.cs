@@ -62,6 +62,7 @@ public class MainForm : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Şimdi Güvenli Yedek Al", null, (_, _) => StartBackup());
         menu.Items.Add("Ayarları Aç", null, (_, _) => { RestoreWindow(); _tabs.SelectedIndex = 1; });
+        menu.Items.Add("Basit Ayarlar (Aze)", null, (_, _) => { RestoreWindow(); OpenWizard(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Kapat", null, (_, _) => { _exiting = true; Close(); });
         _tray.ContextMenuStrip = menu;
@@ -91,7 +92,8 @@ public class MainForm : Form
 
     void OpenWizard()
     {
-        using var w = new FirstRunForm(AppConfig.Load());
+        // Aze-like simple setup first; advanced FirstRun remains available from settings if needed.
+        using var w = new AzeSimpleForm(AppConfig.Load());
         w.ShowDialog(this);
         _cfg = AppConfig.Load();
         LoadSettingsToUi();

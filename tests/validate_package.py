@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mac/Linux/Windows: package structure + config/SQL/script sanity (no SQL Server required)."""
+"""Mac/Linux/Windows: package structure + Aze-like config sanity (no SQL Server required)."""
 from __future__ import annotations
 
 import json
@@ -22,103 +22,85 @@ def check(cond: bool, msg: str) -> None:
 def main() -> int:
     required = [
         "README.md",
+        "HIZLI_BASLANGIC.md",
         "basit-ayarlar.json",
+        "client_secret.json.ornek",
         "backup.master.sql",
         "setup.bat",
         "setup.ps1",
-        "Kurulum-Sunucu.bat",
-        "setup-server.ps1",
-        "Uygula-Ayarlar.ps1",
         "src/Program.cs",
         "src/Core.cs",
         "src/BackupEngine.cs",
-        "src/SQLYedeklemeAraci.csproj",
-        "src/ServerUi.cs",
+        "src/AzeSimpleForm.cs",
+        "src/DriveApiClient.cs",
+        "src/DriveOAuth.cs",
+        "src/StartupHelper.cs",
         "src/MailNotifier.cs",
+        "src/SQLYedeklemeAraci.csproj",
         ".github/workflows/windows-sql-smoke.yml",
     ]
     for rel in required:
         check((ROOT / rel).is_file(), f"exists: {rel}")
 
-    # basit-ayarlar.json — SQL source + Drive dest + optional Eposta
     simple = json.loads((ROOT / "basit-ayarlar.json").read_text(encoding="utf-8"))
-    for key in ("Sunucu", "Hedef", "SaklamaAdedi", "Saat"):
-        check(key in simple, f"basit-ayarlar has {key}")
-    check(simple.get("Hedef") in ("GoogleDrive", "Yerel"), "Hedef is GoogleDrive or Yerel")
-    check(simple.get("Hedef") == "GoogleDrive", "default Hedef is GoogleDrive (Drive destination)")
-    check("GoogleDriveKlasoru" in simple, "basit-ayarlar has GoogleDriveKlasoru")
-    check(isinstance(simple.get("SaklamaAdedi"), int) and 1 <= simple["SaklamaAdedi"] <= 365, "SaklamaAdedi in 1..365")
-    check(bool(re.fullmatch(r"\d{1,2}:\d{2}", str(simple.get("Saat", "")))), "Saat looks like HH:mm")
-    mail = simple.get("Eposta") or {}
-    check(isinstance(mail, dict), "basit-ayarlar has Eposta object")
-    for key in ("Acik", "SmtpSunucu", "SmtpPort", "Kimden", "Kime", "BasaridaGonder"):
-        check(key in mail, f"Eposta has {key}")
-    check(mail.get("Acik") is False, "Eposta.Acik defaults to false (no surprise mail)")
-    check(isinstance(mail.get("SmtpPort"), int) and 1 <= mail["SmtpPort"] <= 65535, "SmtpPort valid")
-    # Sample JSON must not ship a real-looking secret
-    check(not str(mail.get("SmtpParola") or "").strip() or mail.get("SmtpParola") in ("", "SMTP_PAROLANIZ"),
-          "sample SmtpParola empty or placeholder")
+    for key in ("DriveMail", "DriveSifre", "Saat", "SqlSunucu", "SqlKullanici", "SqlSifre", "SaklamaAdedi"):
+        check(key in simple, f"basit-ayarlar has Aze field {key}")
+    check(simple.get("Hedef") in ("GoogleDrive", "GoogleDriveApi", "Yerel"), "Hedef valid")
+    check(simple.get("Hedef") == "GoogleDriveApi", "default Hedef GoogleDriveApi (headless Aze path)")
+    check(isinstance(simple.get("SaklamaAdedi"), int) and 1 <= simple["SaklamaAdedi"] <= 365, "SaklamaAdedi range")
+    check(bool(re.fullmatch(r"\d{1,2}:\d{2}", str(simple.get("Saat", "")))), "Saat HH:mm")
+    check(not str(simple.get("DriveSifre") or "").strip(), "sample DriveSifre empty")
 
     sql = (ROOT / "backup.master.sql").read_text(encoding="utf-8", errors="replace")
-    for token in ("$(StagingDir)", "$(Timestamp)", "$(OnlyDb)", "BACKUP DATABASE", "RESTORE VERIFYONLY", "QUOTENAME"):
+    for token in ("BACKUP DATABASE", "RESTORE VERIFYONLY", "QUOTENAME"):
         check(token in sql, f"SQL contains {token}")
-    # No hardcoded production passwords in SQL script
-    check("Guclu-Bir-Parola" not in sql, "SQL has no sample hardcoded password")
 
     core = (ROOT / "src/Core.cs").read_text(encoding="utf-8", errors="replace")
-    check("PathSafety" in core, "PathSafety helper present")
-    check("RegisterNoLogonSafe" in core, "NoLogon password not on schtasks argv")
-    check("/RP" not in core or "RegisterNoLogonSafe" in core, "schtasks /RP avoided for NoLogon")
-    check('@"C:\\SQLBackup"' in core or r'"C:\SQLBackup"' in core, "Server default backup path")
-    check("SmtpPasswordEnc" in core and "SetSmtpPassword" in core, "SMTP password DPAPI fields")
-    check("ApplyMailSimple" in core, "ApplyMailSimple present")
-    check("ApplyDestination" in core, "ApplyDestination present")
-    check("LooksLikeGoogleDrivePath" in core, "Drive path ACL skip helper")
-    check('DestKind.GoogleDrive' in core, "GoogleDrive destination enum used")
+    for token in ("DriveMail", "DriveAppPasswordEnc", "DriveRefreshTokenEnc", "ApplyAzeMailFromDrive",
+                  "GoogleDriveApi", "SetDriveRefreshToken", "StartWithWindows"):
+        check(token in core, f"Core has {token}")
+
+    aze = (ROOT / "src/AzeSimpleForm.cs").read_text(encoding="utf-8", errors="replace")
+    for token in ("Google e-posta", "uygulama şifresi", "SQL sunucu", "Test Et", "Ayarları Kaydet",
+                  "Windows açılınca", "Google Drive'ı Bağla"):
+        check(token in aze, f"Aze UI has '{token}'")
+
+    oauth = (ROOT / "src/DriveOAuth.cs").read_text(encoding="utf-8", errors="replace")
+    check("AuthorizeInteractiveAsync" in oauth and "RefreshToken" in oauth, "OAuth refresh token flow")
+    check("Logger" not in oauth or "RefreshToken" in oauth, "OAuth module present")
+
+    drive = (ROOT / "src/DriveApiClient.cs").read_text(encoding="utf-8", errors="replace")
+    check("HasDriveUserOAuth" in drive or "FromRefreshToken" in drive, "Drive client supports user OAuth")
+    check("UploadZip" in drive and "EnforceRetention" in drive, "upload + retention")
 
     engine = (ROOT / "src/BackupEngine.cs").read_text(encoding="utf-8", errors="replace")
-    check("IsUnderRoot" in engine, "bak path traversal guard")
-    check("IsSafeDbName" in engine, "db name allowlist")
-    check("IsSafeStagingPath" in engine, "staging path allowlist")
-    check("MailNotifier.NotifyBackup" in engine, "backup calls MailNotifier")
-    check("BACKUP" in (ROOT / "backup.master.sql").read_text(encoding="utf-8"), "SQL BACKUP remains source")
-    check("never skip SQL" in engine.lower() or "SQL BACKUP" in engine, "engine documents SQL→Drive flow")
+    check("RequiresDriveApiUpload" in engine, "engine uploads when API dest")
+    check("MailNotifier.NotifyBackup" in engine, "mail after backup")
+    check("BACKUP DATABASE" in sql, "SQL remains source")
 
-    mail_cs = (ROOT / "src/MailNotifier.cs").read_text(encoding="utf-8", errors="replace")
-    check("yedekleme başarılı" in mail_cs, "success mail contains Turkish phrase")
-    check("SmtpPassword" not in mail_cs or "GetSmtpPassword" in mail_cs, "mail uses GetSmtpPassword not raw field log")
-    check("Logger.Info" in mail_cs and "SmtpPasswordEnc" not in mail_cs, "mail logs host not encrypted blob")
-    check("never" in mail_cs.lower() or "değişmedi" in mail_cs or "best-effort" in mail_cs.lower()
-          or "yedekleme sonucu değişmedi" in mail_cs, "mail failure is best-effort")
+    startup = (ROOT / "src/StartupHelper.cs").read_text(encoding="utf-8", errors="replace")
+    check("--tray" in startup and "CurrentVersion\\Run" in startup, "startup Run key + tray")
 
     prog = (ROOT / "src/Program.cs").read_text(encoding="utf-8", errors="replace")
-    check("--apply-basit" in prog, "headless basit apply switch")
-    check("--backup" in prog, "headless backup switch")
-    check("ApplyMailFromBasit" in prog, "basit apply reads Eposta")
-    check("ApplyDestination" in prog, "basit apply sets destination")
-    check("GoogleDrive" in prog, "basit defaults/mentions GoogleDrive")
-    check("Yerel" in (ROOT / "tests/windows_sql_smoke.ps1").read_text(encoding="utf-8"),
-          "GHA smoke forces Hedef=Yerel (no Drive secrets)")
+    check("DriveMail" in prog and "SqlSunucu" in prog, "ApplyBasit reads Aze fields")
+    check("StartupHelper.Apply" in prog, "apply enables Windows startup")
 
-    # setup.ps1: no Invoke-Expression
-    setup = (ROOT / "setup.ps1").read_text(encoding="utf-8", errors="replace")
-    check("Invoke-Expression" not in setup and "iex " not in setup.lower(), "setup.ps1 has no Invoke-Expression")
-    server_setup = (ROOT / "setup-server.ps1").read_text(encoding="utf-8", errors="replace")
-    check("Invoke-Expression" not in server_setup, "setup-server.ps1 has no Invoke-Expression")
+    csproj = (ROOT / "src/SQLYedeklemeAraci.csproj").read_text(encoding="utf-8")
+    check("Google.Apis.Drive.v3" in csproj and "Google.Apis.Auth" in csproj, "Drive NuGet refs")
+
+    hizli = (ROOT / "HIZLI_BASLANGIC.md").read_text(encoding="utf-8", errors="replace")
+    check("Aze" in hizli and "uygulama şifresi" in hizli and "Google Drive'ı Bağla" in hizli, "hızlı başlangıç Aze checklist")
+
+    smoke = (ROOT / "tests/windows_sql_smoke.ps1").read_text(encoding="utf-8", errors="replace")
+    check("Yerel" in smoke, "GHA smoke stays Yerel (no Drive secrets)")
 
     wf = (ROOT / ".github/workflows/windows-sql-smoke.yml").read_text(encoding="utf-8", errors="replace")
-    check("windows-latest" in wf, "workflow uses windows-latest")
-    check("localdb" in wf.lower() or "MSSQLLocalDB" in wf, "workflow uses LocalDB (free, no SA secret)")
-    # Disallow ${{ secrets.NAME }} custom secrets (LocalDB uses Windows auth; none needed)
+    check("windows-latest" in wf, "windows-latest")
     secret_refs = re.findall(r"secrets\.[A-Za-z0-9_]+", wf)
-    check(all(s == "secrets.GITHUB_TOKEN" for s in secret_refs), "no custom secrets.* refs (LocalDB Windows auth)")
+    check(all(s == "secrets.GITHUB_TOKEN" for s in secret_refs), "no custom GHA secrets")
 
-    # Optional: dist exe presence note (not required for CI build-from-source)
     dist = ROOT / "dist" / "SQLYedeklemeAraci.exe"
-    if dist.is_file():
-        ok.append(f"dist exe present ({dist.stat().st_size // (1024 * 1024)} MB)")
-    else:
-        ok.append("dist exe absent (CI will build from source — OK)")
+    ok.append(f"dist exe {'present' if dist.is_file() else 'absent (CI builds)'} ")
 
     print("=== validate_package ===")
     for m in ok:

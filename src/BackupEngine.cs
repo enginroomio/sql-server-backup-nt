@@ -99,7 +99,16 @@ public class BackupEngine
         Logger.Info($"=== Yedekleme başladı. Sunucu: {_cfg.InstanceName} | Hedef: {_cfg.DestLabel} ({_cfg.DriveTargetFolder}) | Hesap: {Environment.UserName} | Şifreleme: {(_cfg.EncryptEnabled ? "AÇIK (AES-256)" : "kapalı")} ===");
         try
         {
-            if (string.IsNullOrWhiteSpace(_cfg.DestRoot) || !Directory.Exists(_cfg.DestRoot))
+            if (_cfg.RequiresDriveApiUpload)
+            {
+                Directory.CreateDirectory(_cfg.DestRoot);
+                if (string.IsNullOrWhiteSpace(_cfg.DriveApiFolderId))
+                    throw new InvalidOperationException("Google Drive API: KlasorId eksik (basit-ayarlar.json).");
+                if (string.IsNullOrEmpty(_cfg.GetDriveApiKeyJson())
+                    && (string.IsNullOrWhiteSpace(_cfg.DriveApiKeyPath) || !File.Exists(_cfg.DriveApiKeyPath)))
+                    throw new InvalidOperationException("Google Drive API: AnahtarDosyasi eksik veya okunamadı.");
+            }
+            else if (string.IsNullOrWhiteSpace(_cfg.DestRoot) || !Directory.Exists(_cfg.DestRoot))
                 throw new DirectoryNotFoundException($"{_cfg.DestLabel} klasörü bulunamadı: '{_cfg.DestRoot}'.");
             if (_cfg.UseSqlAuth && string.IsNullOrEmpty(_cfg.GetSqlPassword()))
                 throw new InvalidOperationException("SQL oturum parolası okunamadı. Gelişmiş Ayarlar'dan parolayı yeniden girin.");
@@ -114,7 +123,7 @@ public class BackupEngine
                 throw new InvalidOperationException("Geçici (staging) klasör yolu güvenli değil. Varsayılanı kullanın: " + Paths.DefaultStaging);
             Staging.Ensure(_cfg);
             Directory.CreateDirectory(_cfg.DriveTargetFolder);
-            // SQL BACKUP → staging → ZIP → DriveTargetFolder (Google Drive sync client uploads; we never skip SQL BACKUP).
+            // SQL BACKUP → staging → ZIP → local hedef; GoogleDriveApi ise ardından API upload (SQL asla atlanmaz).
             PathSafety.HardenBackupFolderAcl(_cfg.DriveTargetFolder, _cfg.Destination);
 
             var dbs = ListUserDatabases();
@@ -235,8 +244,31 @@ public class BackupEngine
             }
             File.Delete(bak); // safe: zip verified
             AppendManifest(db, bakLen, Path.GetFileName(zipPath));
-            Logger.Success($"[{db}] Güvenli yedek hedefe yazıldı: {zipPath} ({zlen / 1048576.0:F1} MB{(pwd != null ? ", AES-256 şifreli" : "")}). Geçici .bak silindi.");
-            return new DbResult(db, true, false, "Yedek alındı, doğrulandı ve hedefe kopyalandı.", zipPath);
+            Logger.Success($"[{db}] SQL+ZIP tamam: {zipPath} ({zlen / 1048576.0:F1} MB{(pwd != null ? ", AES-256 şifreli" : "")}).");
+
+            // Headless Drive API: local ZIP success is not enough — upload required or job item fails.
+            if (_cfg.RequiresDriveApiUpload)
+            {
+                try
+                {
+                    using var api = DriveApiClient.Create(_cfg);
+                    var leaf = Path.GetFileName(zipPath);
+                    api.UploadZip(zipPath, leaf);
+                    api.EnforceRetention(SafeName(db), _cfg.RetentionDays);
+                    Logger.Success($"[{db}] Drive API yükleme OK → klasör {_cfg.DriveApiFolderId}");
+                }
+                catch (Exception upEx)
+                {
+                    Logger.Error($"[{db}] Drive API yükleme BAŞARISIZ (yerel ZIP duruyor: {zipPath}): {upEx.Message}");
+                    return new DbResult(db, false, false,
+                        "SQL yedeği alındı ama Google Drive API yüklemesi başarısız: " + upEx.Message + " — yerel: " + zipPath, zipPath);
+                }
+            }
+
+            return new DbResult(db, true, false,
+                _cfg.RequiresDriveApiUpload
+                    ? "Yedek alındı, doğrulandı ve Google Drive API'ye yüklendi."
+                    : "Yedek alındı, doğrulandı ve hedefe kopyalandı.", zipPath);
         }
         catch (Exception ex)
         {
@@ -315,6 +347,7 @@ public class BackupEngine
     /// the Drive "SQLBackup" folder and the staging folder (no recursion). Keeps newest N.</summary>
     void Cleanup(string db)
     {
+        // Local cache / sync-folder retention (Drive API also enforces cloud retention after upload).
         var rx = new Regex("^" + Regex.Escape(SafeName(db)) + @"_\d{8}_\d{6}\.zip$", RegexOptions.IgnoreCase);
         foreach (var dirRaw in new[] { _cfg.DriveTargetFolder, _cfg.StagingFolder })
         {
