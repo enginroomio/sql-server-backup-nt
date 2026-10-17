@@ -68,8 +68,8 @@ public class FirstRunForm : Form
                 : _driveVal;
         };
         _mode.Items.AddRange(ServerUi.ModeNames);
-        _mode.SelectedIndex = OsInfo.IsServer && cfg.Mode == TaskMode.Interactive
-            ? (int)TaskMode.NoLogon : (int)cfg.Mode;
+        // Varsayılan Interactive (parola/UAC istemez). Oturumsuz sunucu: kullanıcı bilerek NoLogon/SYSTEM seçer.
+        _mode.SelectedIndex = (int)cfg.Mode;
 
         _steps[0] = BuildStep1(); _steps[1] = BuildStep2(); _steps[2] = BuildStep3();
         var nav = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
