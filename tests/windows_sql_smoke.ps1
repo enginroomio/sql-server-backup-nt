@@ -88,10 +88,11 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "Published exe missing: $exe" }
 $backupRoot = Join-Path $env:RUNNER_TEMP 'SQLBackupCi'
 if (-not $backupRoot) { $backupRoot = Join-Path $env:TEMP 'SQLBackupCi' }
 New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-# Staging under ProgramData-like writable path for LocalDB service account quirks —
-# LocalDB runs as current user, so TEMP staging works if we point config there.
-$staging = Join-Path $backupRoot 'Staging'
+# Staging under ProgramData (app default). LocalDB runs as the current user — no
+# NT Service\MSSQL$* account — so user+SYSTEM ACL is enough (see Staging.Ensure).
+$staging = Join-Path $env:ProgramData 'SQLBackupTool\Staging'
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
+Remove-Item -LiteralPath (Join-Path $staging '.acl_ok') -Force -ErrorAction SilentlyContinue
 
 $simple = Join-Path $backupRoot 'basit-ayarlar.ci.json'
 # CI: local destination only — no Google Drive / secrets. Production default is GoogleDrive.
